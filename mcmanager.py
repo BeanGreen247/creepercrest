@@ -5,6 +5,7 @@ import os
 import sys
 import io
 import json
+import time
 import zipfile
 import threading
 import subprocess
@@ -40,11 +41,12 @@ def save_cfg(data):
 
 class ManagedServer:
     def __init__(self, sid, scfg):
-        self.id      = sid
-        self.cfg     = scfg
-        self.process = None
-        self.logs    = deque(maxlen=300)
-        self._lock   = threading.Lock()
+        self.id        = sid
+        self.cfg       = scfg
+        self.process   = None
+        self.logs      = deque(maxlen=300)
+        self._lock     = threading.Lock()
+        self._last_cpu = None  # (cpu_ticks, monotonic_time)
 
     def is_running(self):
         return self.process is not None and self.process.poll() is None
@@ -128,8 +130,37 @@ class ManagedServer:
         except Exception:
             pass
 
+    def metrics(self):
+        if not self.is_running():
+            self._last_cpu = None
+            return {"cpu_pct": 0.0, "rss_mb": 0.0}
+        pid = self.process.pid
+        try:
+            rss_kb = 0
+            with open(f"/proc/{pid}/status") as fh:
+                for line in fh:
+                    if line.startswith("VmRSS:"):
+                        rss_kb = int(line.split()[1])
+                        break
+            with open(f"/proc/{pid}/stat") as fh:
+                fields = fh.read().split()
+            cpu_ticks = int(fields[13]) + int(fields[14])
+            now = time.monotonic()
+            hz  = os.sysconf(os.sysconf_names["SC_CLK_TCK"])
+            cpu_pct = 0.0
+            if self._last_cpu is not None:
+                dt = now - self._last_cpu[1]
+                dc = (cpu_ticks - self._last_cpu[0]) / hz
+                if dt > 0.1:
+                    cpu_pct = min(100.0, (dc / dt) * 100)
+            self._last_cpu = (cpu_ticks, now)
+            return {"cpu_pct": round(cpu_pct, 1), "rss_mb": round(rss_kb / 1024, 1)}
+        except Exception:
+            return {"cpu_pct": 0.0, "rss_mb": 0.0}
+
     def status(self):
         legacy  = self.cfg.get("memory_mb", 1024)
+        m = self.metrics()
         return {
             "id":            self.id,
             "name":          self.cfg.get("name", self.id),
@@ -140,6 +171,8 @@ class ManagedServer:
             "directory":     self.cfg.get("directory", ""),
             "jar":           self.cfg.get("jar", "server.jar"),
             "extra_args":    self.cfg.get("extra_args", ""),
+            "cpu_pct":       m["cpu_pct"],
+            "rss_mb":        m["rss_mb"],
         }
 
 # ── Global state ───────────────────────────────────────────────────────────────
@@ -239,131 +272,168 @@ HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>MCManager</title>
+<script>(function(){const s=localStorage.getItem('mcm-theme');const d=window.matchMedia('(prefers-color-scheme: dark)').matches;if(s==='dark'||(s===null&&d))document.documentElement.setAttribute('data-theme','dark');})()</script>
 <style>
+:root{
+  --bg:#ffffff;--text:#1a1a1a;--muted:#555555;
+  --accent:#0066cc;--accent-h:#004499;
+  --border:#dddddd;--section-bg:#f8f8f8;
+  --up:#2e7d32;--down:#c62828;--degraded:#e65100;
+  --bar-empty:#e0e0e0;
+}
+[data-theme="dark"]{
+  --bg:#111111;--text:#e0e0e0;--muted:#999999;
+  --accent:#4d9fff;--accent-h:#80bcff;
+  --border:#2a2a2a;--section-bg:#1a1a1a;
+  --up:#43a047;--down:#ef5350;--degraded:#fb8c00;
+  --bar-empty:#2a2a2a;
+}
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
-a{color:#58a6ff;text-decoration:none}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  min-height:100vh;line-height:1.6}
+a{color:var(--accent);text-decoration:none}
+a:hover{color:var(--accent-h);text-decoration:underline}
 
-header{background:#161b22;border-bottom:1px solid #30363d;padding:.9rem 2rem;display:flex;align-items:center;gap:1rem}
-header h1{font-size:1.3rem;color:#f0f6fc;font-weight:700}
-.refresh-ctrl{display:flex;align-items:center;gap:.4rem;font-size:.78rem;color:#7d8590;margin-left:auto}
-.refresh-ctrl input{width:52px;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;
+header{background:var(--bg);border-bottom:1px solid var(--border);
+  padding:.9rem 2rem;display:flex;align-items:center;gap:1rem;
+  position:sticky;top:0;z-index:10}
+header h1{font-size:1.3rem;color:var(--text);font-weight:700}
+.theme-btn{background:var(--section-bg);border:1px solid var(--border);border-radius:4px;
+  padding:.25rem .55rem;cursor:pointer;color:var(--muted);font-size:.82rem;line-height:1.4}
+.theme-btn:hover{color:var(--text);border-color:var(--accent)}
+.refresh-ctrl{display:flex;align-items:center;gap:.4rem;font-size:.78rem;color:var(--muted);margin-left:auto}
+.refresh-ctrl input{width:52px;background:var(--bg);border:1px solid var(--border);color:var(--text);
   padding:.25rem .4rem;border-radius:4px;font-size:.78rem;text-align:center;outline:none}
-.refresh-ctrl input:focus{border-color:#58a6ff}
-#upd{color:#7d8590;font-size:.8rem}
+.refresh-ctrl input:focus{border-color:var(--accent)}
+#upd{color:var(--muted);font-size:.8rem}
 
 main{padding:1.5rem 2rem;max-width:1300px;margin:0 auto}
 section+section{margin-top:2rem}
 .sec-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:.9rem}
-.sec-hdr h2{font-size:1rem;font-weight:600;color:#f0f6fc}
+.sec-hdr h2{font-size:1rem;font-weight:600;color:var(--text);
+  padding-bottom:.35rem;border-bottom:2px solid var(--accent)}
 
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(460px,1fr));gap:1rem}
 
-.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:1.2rem}
+.card{background:var(--section-bg);border:1px solid var(--border);border-radius:8px;padding:1.2rem}
 .card-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:.9rem}
-.card-name{font-size:1rem;font-weight:600;color:#f0f6fc}
-.badge{font-size:.72rem;font-weight:700;padding:.2rem .55rem;border-radius:20px}
-.badge.on{background:#1a3a28;color:#3fb950;border:1px solid #238636}
-.badge.off{background:#3d1616;color:#f85149;border:1px solid #8b1a1a}
+.card-name{font-size:1rem;font-weight:600;color:var(--text)}
+.badge{font-size:.72rem;font-weight:700;padding:.2rem .55rem;border-radius:4px;
+  border:1px solid var(--border);background:transparent}
+.badge.on{border-color:var(--up);color:var(--up)}
+.badge.off{border-color:var(--down);color:var(--down)}
 
-.info{font-size:.78rem;color:#7d8590;margin-bottom:.85rem;line-height:1.7}
-.info b{color:#c9d1d9}
+.info{font-size:.78rem;color:var(--muted);margin-bottom:.85rem;line-height:1.7}
+.info b{color:var(--text)}
 
 .ram-row{display:flex;align-items:center;gap:.5rem;margin-bottom:.85rem;flex-wrap:wrap}
-.ram-row label{font-size:.78rem;color:#7d8590;white-space:nowrap}
-.ram-row input{background:#0d1117;border:1px solid #30363d;color:#c9d1d9;
+.ram-row label{font-size:.78rem;color:var(--muted);white-space:nowrap}
+.ram-row input{background:var(--bg);border:1px solid var(--border);color:var(--text);
   padding:.3rem .55rem;border-radius:5px;font-size:.83rem;width:75px;outline:none}
-.ram-row input:focus{border-color:#58a6ff}
-.ram-sep{color:#30363d;font-size:.85rem}
+.ram-row input:focus{border-color:var(--accent)}
+.ram-sep{color:var(--border);font-size:.85rem}
 
 .btn-row{display:flex;flex-wrap:wrap;gap:.45rem;margin-bottom:.85rem}
-.btn{border:none;border-radius:5px;padding:.38rem .8rem;font-size:.8rem;font-weight:500;
-  cursor:pointer;transition:opacity .12s}
+.btn{border:1px solid var(--border);border-radius:5px;padding:.38rem .8rem;font-size:.8rem;
+  font-weight:500;cursor:pointer;transition:opacity .12s;
+  background:var(--section-bg);color:var(--text)}
 .btn:hover{opacity:.8}
 .btn:disabled{opacity:.35;cursor:not-allowed}
-.bg-green{background:#238636;color:#fff}
-.bg-red{background:#8b1a1a;color:#f85149;border:1px solid #8b1a1a}
-.bg-blue{background:#1f3a6e;color:#79c0ff;border:1px solid #1f6feb}
-.bg-teal{background:#0f3d3d;color:#56d4c8;border:1px solid #0d6e6e}
-.bg-yellow{background:#5a3e13;color:#e3b341;border:1px solid #9e6a03}
-.bg-gray{background:#21262d;color:#c9d1d9;border:1px solid #30363d}
-.bg-danger{background:transparent;color:#f85149;border:1px solid #6e2222}
+.bg-green{background:transparent;color:var(--up);border-color:var(--up)}
+.bg-red{background:transparent;color:var(--down);border-color:var(--down)}
+.bg-blue{background:transparent;color:var(--accent);border-color:var(--accent)}
+.bg-teal{background:transparent;color:#0097a7;border-color:#0097a7}
+.bg-yellow{background:transparent;color:var(--degraded);border-color:var(--degraded)}
+.bg-gray{background:var(--section-bg);color:var(--text);border-color:var(--border)}
+.bg-danger{background:transparent;color:var(--down);border-color:var(--down)}
 
-.con-toggle{font-size:.78rem;color:#58a6ff;cursor:pointer;user-select:none;display:inline-block;margin-bottom:.5rem}
-.console{display:none;background:#0a0c10;border:1px solid #21262d;border-radius:5px;
+.con-toggle{font-size:.78rem;color:var(--accent);cursor:pointer;user-select:none;
+  display:inline-block;margin-bottom:.5rem}
+.console{display:none;background:var(--bg);border:1px solid var(--border);border-radius:5px;
   padding:.6rem .7rem;height:190px;overflow-y:auto;font-family:'Consolas',monospace;
-  font-size:.76rem;color:#8b949e;margin-bottom:.6rem;line-height:1.55}
+  font-size:.76rem;color:var(--muted);margin-bottom:.6rem;line-height:1.55}
 .console.open{display:block}
 .console p{white-space:pre-wrap;word-break:break-all}
 .cmd-row{display:none;gap:.4rem}
 .cmd-row.open{display:flex}
-.cmd-row input[type=text]{flex:1;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;
+.cmd-row input[type=text]{flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);
   padding:.3rem .55rem;border-radius:5px;font-size:.83rem;font-family:monospace;outline:none}
-.cmd-row input[type=text]:focus{border-color:#58a6ff}
+.cmd-row input[type=text]:focus{border-color:var(--accent)}
 
-/* ── Backups ── */
 .backup-row{display:flex;align-items:center;gap:1rem;padding:.6rem .9rem;
-  background:#161b22;border:1px solid #30363d;border-radius:6px;margin-bottom:.4rem;font-size:.82rem}
-.backup-row input[type=checkbox]{accent-color:#58a6ff;width:14px;height:14px;flex-shrink:0}
-.backup-row .bname{flex:1;font-family:monospace;color:#c9d1d9;font-size:.8rem;word-break:break-all}
-.backup-row .bmeta{color:#7d8590;white-space:nowrap}
+  background:var(--section-bg);border:1px solid var(--border);border-radius:6px;
+  margin-bottom:.4rem;font-size:.82rem}
+.backup-row input[type=checkbox]{accent-color:var(--accent);width:14px;height:14px;flex-shrink:0}
+.backup-row .bname{flex:1;font-family:monospace;color:var(--text);font-size:.8rem;word-break:break-all}
+.backup-row .bmeta{color:var(--muted);white-space:nowrap}
 
-.empty{color:#7d8590;font-size:.88rem;padding:1.8rem;text-align:center;
-  border:1px dashed #30363d;border-radius:8px}
+.empty{color:var(--muted);font-size:.88rem;padding:1.8rem;text-align:center;
+  border:1px dashed var(--border);border-radius:8px}
 
-/* ── Add server modal ── */
-.overlay{position:fixed;inset:0;background:rgba(0,0,0,.78);display:none;
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;
   align-items:center;justify-content:center;z-index:100}
 .overlay.open{display:flex}
-.modal{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:1.5rem;width:min(520px,94vw)}
-.modal h3{margin-bottom:1.1rem;color:#f0f6fc;font-size:1rem}
+.modal{background:var(--bg);border:1px solid var(--border);border-radius:10px;
+  padding:1.5rem;width:min(520px,94vw)}
+.modal h3{margin-bottom:1.1rem;color:var(--text);font-size:1rem;font-weight:600}
 .frow{margin-bottom:.7rem}
-.frow label{display:block;font-size:.78rem;color:#7d8590;margin-bottom:.3rem}
-.frow input{width:100%;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;
+.frow label{display:block;font-size:.78rem;color:var(--muted);margin-bottom:.3rem;font-weight:600}
+.frow input{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);
   padding:.4rem .7rem;border-radius:5px;font-size:.85rem;outline:none}
-.frow input:focus{border-color:#58a6ff}
+.frow input:focus{border-color:var(--accent)}
 .frow-2{display:grid;grid-template-columns:1fr 1fr;gap:.7rem}
 .modal-btns{display:flex;gap:.5rem;justify-content:flex-end;margin-top:1.1rem}
 
-/* ── File browser ── */
 #fb-overlay{z-index:200}
-.fb-modal{background:#161b22;border:1px solid #30363d;border-radius:10px;
+.fb-modal{background:var(--bg);border:1px solid var(--border);border-radius:10px;
   width:min(900px,96vw);max-height:90vh;display:flex;flex-direction:column}
-.fb-header{padding:1rem 1.2rem;border-bottom:1px solid #30363d;display:flex;align-items:center;gap:.7rem}
-.fb-header h3{color:#f0f6fc;font-size:1rem;margin-right:auto}
-.breadcrumb{display:flex;align-items:center;gap:.3rem;flex-wrap:wrap;font-size:.8rem;color:#7d8590;flex:1}
-.breadcrumb span{cursor:pointer;color:#58a6ff}
+.fb-header{padding:1rem 1.2rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.7rem}
+.fb-header h3{color:var(--text);font-size:1rem;margin-right:auto}
+.breadcrumb{display:flex;align-items:center;gap:.3rem;flex-wrap:wrap;font-size:.8rem;color:var(--muted);flex:1}
+.breadcrumb span{cursor:pointer;color:var(--accent)}
 .breadcrumb span:hover{text-decoration:underline}
-.breadcrumb .sep{color:#30363d}
-.fb-toolbar{padding:.7rem 1.2rem;border-bottom:1px solid #21262d;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
-.fb-toolbar label{font-size:.78rem;color:#7d8590;cursor:pointer;display:flex;align-items:center;gap:.35rem;margin-right:.5rem}
+.breadcrumb .sep{color:var(--border)}
+.fb-toolbar{padding:.7rem 1.2rem;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.fb-toolbar label{font-size:.78rem;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:.35rem;margin-right:.5rem}
 .fb-body{flex:1;overflow-y:auto;padding:0}
-.fb-foot{padding:.6rem 1.2rem;border-top:1px solid #21262d;font-size:.75rem;color:#7d8590}
+.fb-foot{padding:.6rem 1.2rem;border-top:1px solid var(--border);font-size:.75rem;color:var(--muted)}
 .fb-table{width:100%;border-collapse:collapse}
 .fb-table th{text-align:left;padding:.5rem 1rem;font-size:.75rem;font-weight:600;
-  color:#7d8590;border-bottom:1px solid #21262d;position:sticky;top:0;background:#161b22}
-.fb-table td{padding:.45rem 1rem;font-size:.82rem;border-bottom:1px solid #161b22}
-.fb-table tr:hover td{background:#1c2128}
-.fb-table .fn{color:#c9d1d9;cursor:pointer}
-.fb-table .fn:hover{color:#58a6ff;text-decoration:underline}
-.fb-table .dir .fn{color:#79c0ff}
-.fb-table .fsize,.fb-table .fdate{color:#7d8590;white-space:nowrap}
-.fb-table input[type=checkbox]{accent-color:#58a6ff;width:14px;height:14px}
-.fb-empty{padding:2rem;text-align:center;color:#7d8590;font-size:.88rem}
+  color:var(--muted);border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg)}
+.fb-table td{padding:.45rem 1rem;font-size:.82rem;border-bottom:1px solid var(--section-bg)}
+.fb-table tr:hover td{background:var(--section-bg)}
+.fb-table .fn{color:var(--text);cursor:pointer}
+.fb-table .fn:hover{color:var(--accent);text-decoration:underline}
+.fb-table .dir .fn{color:var(--accent)}
+.fb-table .fsize,.fb-table .fdate{color:var(--muted);white-space:nowrap}
+.fb-table input[type=checkbox]{accent-color:var(--accent);width:14px;height:14px}
+.fb-empty{padding:2rem;text-align:center;color:var(--muted);font-size:.88rem}
 .upload-btn{position:relative;overflow:hidden;display:inline-block}
 .upload-btn input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;font-size:100px}
 
-/* ── Flash ── */
-.flash{position:fixed;bottom:1.5rem;right:1.5rem;background:#1f3a6e;color:#79c0ff;
-  border:1px solid #1f6feb;border-radius:6px;padding:.6rem 1rem;font-size:.85rem;
+.metrics-section{margin-bottom:.75rem}
+.metric-row{display:flex;align-items:center;gap:.5rem;margin-bottom:.35rem}
+.metric-lbl{font-size:.72rem;color:var(--muted);width:30px;flex-shrink:0;
+  text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+.bar-track{flex:1;height:7px;background:var(--bar-empty);border-radius:4px;overflow:hidden}
+.bar-fill{height:100%;border-radius:4px;transition:width .5s ease}
+.metric-val{font-size:.72rem;color:var(--muted);white-space:nowrap;min-width:90px;
+  text-align:right;font-family:"JetBrains Mono","Fira Code",Consolas,monospace}
+
+.flash{position:fixed;bottom:1.5rem;right:1.5rem;background:var(--section-bg);color:var(--text);
+  border:1px solid var(--border);border-radius:6px;padding:.6rem 1rem;font-size:.85rem;
   opacity:0;transition:opacity .3s;z-index:300;max-width:340px;pointer-events:none}
 .flash.show{opacity:1}
-.flash.err{background:#3d1616;color:#f85149;border-color:#8b1a1a}
+.flash.err{background:transparent;color:var(--down);border-color:var(--down)}
 </style>
 </head>
 <body>
 <header>
   <h1>&#9935; MCManager</h1>
+  <button class="theme-btn" onclick="toggleTheme()" title="Toggle dark/light mode">&#9728; / &#9790;</button>
   <div class="refresh-ctrl">
     <label for="refresh-secs">Refresh every</label>
     <input id="refresh-secs" type="number" min="1" max="300" value="5"/>
@@ -383,9 +453,9 @@ section+section{margin-top:2rem}
     <div class="sec-hdr">
       <h2>Backups</h2>
       <div style="display:flex;align-items:center;gap:.7rem">
-        <small style="color:#7d8590;font-size:.78rem">Saved to <code id="bak-dir">~/mc-backups</code></small>
-        <label style="font-size:.78rem;color:#7d8590;cursor:pointer;display:flex;align-items:center;gap:.3rem">
-          <input type="checkbox" id="bak-selall" onchange="toggleBakSelAll(this.checked)" style="accent-color:#58a6ff"> All
+        <small style="color:var(--muted);font-size:.78rem">Saved to <code id="bak-dir">~/mc-backups</code></small>
+        <label style="font-size:.78rem;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:.3rem">
+          <input type="checkbox" id="bak-selall" onchange="toggleBakSelAll(this.checked)" style="accent-color:var(--accent)"> All
         </label>
         <button class="btn bg-danger" id="bak-del" onclick="delBackups()" disabled style="font-size:.78rem;padding:.3rem .65rem">&#128465; Delete Selected</button>
       </div>
@@ -482,6 +552,32 @@ async function api(method, path, body) {
 
 // ── Server cards ───────────────────────────────────────────────────────────────
 
+function barColor(pct) {
+  if (pct >= 85) return 'var(--down)';
+  if (pct >= 60) return 'var(--degraded)';
+  return 'var(--up)';
+}
+
+function metricsHTML(s) {
+  const ramPct  = s.memory_max_mb > 0 ? Math.min(100, (s.rss_mb / s.memory_max_mb) * 100) : 0;
+  const cpuPct  = s.cpu_pct || 0;
+  const ramUsed = s.rss_mb >= 1024 ? (s.rss_mb / 1024).toFixed(2) + ' GB' : s.rss_mb + ' MB';
+  const ramMax  = s.memory_max_mb >= 1024 ? (s.memory_max_mb / 1024).toFixed(1) + ' GB' : s.memory_max_mb + ' MB';
+  return `
+<div class="metrics-section">
+  <div class="metric-row">
+    <span class="metric-lbl">CPU</span>
+    <div class="bar-track"><div class="bar-fill" style="width:${cpuPct}%;background:${barColor(cpuPct)}"></div></div>
+    <span class="metric-val">${cpuPct}%</span>
+  </div>
+  <div class="metric-row">
+    <span class="metric-lbl">RAM</span>
+    <div class="bar-track"><div class="bar-fill" style="width:${ramPct.toFixed(1)}%;background:${barColor(ramPct)}"></div></div>
+    <span class="metric-val">${ramUsed} / ${ramMax}</span>
+  </div>
+</div>`;
+}
+
 function cardHTML(s) {
   const run = s.running;
   return `
@@ -503,6 +599,7 @@ function cardHTML(s) {
     <span style="color:#7d8590;font-size:.75rem">MB</span>
     <button class="btn bg-gray" onclick="saveRAM('${s.id}')" style="font-size:.75rem;padding:.3rem .65rem">Save</button>
   </div>
+  ${run ? metricsHTML(s) : ''}
   <div class="btn-row">
     <button class="btn bg-green"  ${run?'disabled':''} onclick="act('${s.id}','start')">&#9654; Start</button>
     <button class="btn bg-red"    ${run?'':'disabled'} onclick="act('${s.id}','stop')">&#9632; Stop</button>
@@ -855,6 +952,14 @@ async function delSelected() {
   }
   flash(failed ? `Done (${failed} failed)` : `Deleted ${names.length} item(s)`, !!failed);
   loadDir(fb.path);
+}
+
+// ── Theme ──────────────────────────────────────────────────────────────────────
+
+function toggleTheme() {
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  document.documentElement.setAttribute('data-theme', isDark ? 'light' : 'dark');
+  localStorage.setItem('mcm-theme', isDark ? 'light' : 'dark');
 }
 
 // ── Boot ───────────────────────────────────────────────────────────────────────
