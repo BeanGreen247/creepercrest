@@ -130,7 +130,48 @@ class ManagedServer:
             pass
 
     def status(self):
-        legacy  = self.cfg.get("memory_mb", 1024)
+        legacy        = self.cfg.get("memory_mb", 1024)
+        cpu_pct       = None
+        ram_mb        = None
+        heap_used_mb  = None
+        heap_total_mb = None
+        meta_used_mb  = None
+        meta_total_mb = None
+        if self.is_running():
+            pid = self.process.pid
+            try:
+                r = subprocess.run(
+                    ["ps", "-p", str(pid), "-o", "%cpu,rss", "--no-headers"],
+                    capture_output=True, text=True, timeout=2,
+                )
+                if r.returncode == 0:
+                    parts = r.stdout.split()
+                    if len(parts) >= 2:
+                        cpu_pct = round(float(parts[0]), 1)
+                        ram_mb  = int(parts[1]) // 1024
+            except Exception:
+                pass
+            try:
+                rj = subprocess.run(
+                    ["jstat", "-gc", str(pid)],
+                    capture_output=True, text=True, timeout=3,
+                )
+                if rj.returncode == 0:
+                    lines = rj.stdout.strip().splitlines()
+                    if len(lines) >= 2:
+                        vals = lines[-1].split()
+                        if len(vals) >= 10:
+                            s0c, s1c = float(vals[0]), float(vals[1])
+                            s0u, s1u = float(vals[2]), float(vals[3])
+                            ec,  eu  = float(vals[4]), float(vals[5])
+                            oc,  ou  = float(vals[6]), float(vals[7])
+                            mc,  mu  = float(vals[8]), float(vals[9])
+                            heap_used_mb  = round((s0u + s1u + eu + ou) / 1024, 1)
+                            heap_total_mb = round((s0c + s1c + ec + oc) / 1024, 1)
+                            meta_used_mb  = round(mu / 1024, 1)
+                            meta_total_mb = round(mc / 1024, 1)
+            except Exception:
+                pass
         return {
             "id":            self.id,
             "name":          self.cfg.get("name", self.id),
@@ -141,6 +182,12 @@ class ManagedServer:
             "directory":     self.cfg.get("directory", ""),
             "jar":           self.cfg.get("jar", "server.jar"),
             "extra_args":    self.cfg.get("extra_args", ""),
+            "cpu_pct":       cpu_pct,
+            "ram_mb":        ram_mb,
+            "heap_used_mb":  heap_used_mb,
+            "heap_total_mb": heap_total_mb,
+            "meta_used_mb":  meta_used_mb,
+            "meta_total_mb": meta_total_mb,
         }
 
 # ── Global state ───────────────────────────────────────────────────────────────
@@ -354,6 +401,22 @@ section+section{margin-top:2rem}
 .upload-btn{position:relative;overflow:hidden;display:inline-block}
 .upload-btn input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;font-size:100px}
 
+/* ── Usage bars ── */
+.usage-bars{margin-bottom:.7rem}
+.usage-row{display:flex;align-items:center;gap:.5rem;margin-bottom:.32rem}
+.usage-label{font-size:.72rem;color:#7d8590;width:30px;flex-shrink:0}
+.usage-bar{flex:1;height:6px;background:#21262d;border-radius:3px;overflow:hidden}
+.usage-fill{height:100%;border-radius:3px;transition:width .6s ease}
+.cpu-fill{background:#1f6feb}
+.ram-fill{background:#238636}
+.ram-fill.hi{background:#e3b341}
+.ram-fill.crit{background:#f85149}
+.heap-fill{background:#7c3aed}
+.heap-fill.hi{background:#e3b341}
+.heap-fill.crit{background:#f85149}
+.meta-fill{background:#0e7490}
+.usage-val{font-size:.72rem;color:#7d8590;white-space:nowrap;min-width:90px;text-align:right}
+
 /* ── Flash ── */
 .flash{position:fixed;bottom:1.5rem;right:1.5rem;background:#1f3a6e;color:#79c0ff;
   border:1px solid #1f6feb;border-radius:6px;padding:.6rem 1rem;font-size:.85rem;
@@ -364,7 +427,7 @@ section+section{margin-top:2rem}
 </head>
 <body>
 <header>
-  <h1>&#9935; CreeperCrest</h1>
+  <h1><svg width="22" height="22" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="vertical-align:-.25rem"><rect width="16" height="16" rx="1" fill="#3d6e28"/><rect x="2" y="3" width="4" height="3" fill="#1a2e0e"/><rect x="10" y="3" width="4" height="3" fill="#1a2e0e"/><rect x="6" y="8" width="4" height="1" fill="#1a2e0e"/><rect x="4" y="9" width="2" height="3" fill="#1a2e0e"/><rect x="10" y="9" width="2" height="3" fill="#1a2e0e"/><rect x="6" y="11" width="4" height="1" fill="#1a2e0e"/></svg> CreeperCrest</h1>
   <div class="refresh-ctrl">
     <label for="refresh-secs">Refresh every</label>
     <input id="refresh-secs" type="number" min="1" max="300" value="__REFRESH_INTERVAL__"/>
@@ -495,6 +558,24 @@ function cardHTML(s) {
     <div class="info">
       <b>Dir</b> ${esc(s.directory)}&nbsp;&nbsp;<b>JAR</b> ${esc(s.jar)}${s.pid?`&nbsp;&nbsp;<b>PID</b> ${s.pid}`:''}
     </div>
+    ${run && s.cpu_pct !== null ? `<div class="usage-bars">
+      <div class="usage-row">
+        <span class="usage-label">CPU</span>
+        <div class="usage-bar"><div class="usage-fill cpu-fill" style="width:${Math.min(s.cpu_pct,100)}%"></div></div>
+        <span class="usage-val">${s.cpu_pct.toFixed(1)}%</span>
+      </div>
+      <div class="usage-row">
+        <span class="usage-label">RAM</span>
+        ${(()=>{const pct=s.memory_max_mb?Math.round(s.ram_mb/s.memory_max_mb*100):0;const cls=pct>=90?'crit':pct>=75?'hi':'';return `<div class="usage-bar"><div class="usage-fill ram-fill ${cls}" style="width:${Math.min(pct,100)}%"></div></div><span class="usage-val">${s.ram_mb} / ${s.memory_max_mb} MB</span>`})()}
+      </div>
+      ${s.heap_used_mb !== null ? (()=>{
+        const hp=Math.min(s.heap_total_mb?Math.round(s.heap_used_mb/s.heap_total_mb*100):0,100);
+        const hc=hp>=90?'crit':hp>=75?'hi':'';
+        const mp=Math.min(s.meta_total_mb?Math.round(s.meta_used_mb/s.meta_total_mb*100):0,100);
+        return '<div class="usage-row"><span class="usage-label">Heap</span><div class="usage-bar"><div class="usage-fill heap-fill '+hc+'" style="width:'+hp+'%"></div></div><span class="usage-val">'+s.heap_used_mb+' / '+s.heap_total_mb+' MB</span></div>'
+             + '<div class="usage-row"><span class="usage-label">Meta</span><div class="usage-bar"><div class="usage-fill meta-fill" style="width:'+mp+'%"></div></div><span class="usage-val">'+s.meta_used_mb+' MB</span></div>';
+      })() : ''}
+    </div>` : ''}
     <div class="ram-row">
       <label>Min RAM</label>
       <input id="min-${s.id}" type="number" value="${s.memory_min_mb}" min="256" step="256"/>
