@@ -370,7 +370,7 @@ section+section{margin-top:2rem}
 .ram-sep{color:#30363d;font-size:.85rem}
 
 .btn-row{display:flex;flex-wrap:wrap;gap:.45rem;margin-bottom:.85rem}
-.btn-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.45rem;margin-bottom:.45rem}
+.btn-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.45rem;margin:0 auto .45rem;width:min(100%,380px)}
 .btn-grid .btn{padding:.6rem .5rem;font-size:.85rem;font-weight:600;width:100%}
 .btn-remove-row{display:flex;justify-content:center;margin-bottom:.6rem}
 .btn{border:none;border-radius:5px;padding:.38rem .8rem;font-size:.8rem;font-weight:500;
