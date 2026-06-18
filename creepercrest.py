@@ -480,7 +480,7 @@ section+section{margin-top:2rem}
 </head>
 <body>
 <header>
-  <h1><svg width="22" height="22" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="vertical-align:-.25rem"><rect width="16" height="16" rx="1" fill="#3d6e28"/><rect x="2" y="3" width="4" height="3" fill="#1a2e0e"/><rect x="10" y="3" width="4" height="3" fill="#1a2e0e"/><rect x="6" y="8" width="4" height="1" fill="#1a2e0e"/><rect x="4" y="9" width="2" height="3" fill="#1a2e0e"/><rect x="10" y="9" width="2" height="3" fill="#1a2e0e"/><rect x="6" y="11" width="4" height="1" fill="#1a2e0e"/></svg> CreeperCrest</h1>
+  <h1><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160.07292 160.07292" width="22" height="22" aria-hidden="true" style="vertical-align:-.25rem"><rect fill="#3eae30" width="160.07292" height="160.07292"/><g transform="translate(36.947174,215.35194)"><path fill="#000" d="M 14.646575,-93.549115 H 28.820683 V -107.72322 H 57.73586 v 13.985119 H 72.287943 V -136.73289 H 58.019342 v -42.99479 H 86.840026 V -150.907 H 0.0944922 v -28.82068 H 29.009669 v 43.08928 H 14.646575 Z"/></g></svg> CreeperCrest</h1>
   <div class="refresh-ctrl">
     <label for="refresh-secs">Refresh every</label>
     <input id="refresh-secs" type="number" min="5" max="300" value="__REFRESH_INTERVAL__"/>
