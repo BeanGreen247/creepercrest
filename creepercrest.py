@@ -51,9 +51,11 @@ def _sysinfo_sampler():
     while True:
         try:
             with open('/proc/stat') as f:
-                vals = list(map(int, f.readline().split()[1:8]))
-            idle  = vals[3] + vals[4]   # idle + iowait
-            total = sum(vals)
+                raw = f.readline().split()[1:]      # all fields: user nice sys idle iowait irq softirq steal …
+            vals  = list(map(int, raw))
+            # guest/guest_nice are already counted inside user/nice — exclude to avoid double-counting
+            idle  = vals[3] + vals[4]               # idle + iowait
+            total = sum(vals[:8])                   # user nice sys idle iowait irq softirq steal
             if _cpu_stat_prev is not None:
                 d_idle, d_total = idle - _cpu_stat_prev[0], total - _cpu_stat_prev[1]
                 if d_total > 0:
@@ -180,8 +182,8 @@ class ManagedServer:
         ram_mb        = None
         heap_used_mb  = None
         heap_total_mb = None
-        meta_used_mb  = None
-        meta_total_mb = None
+        ygc           = None
+        fgc           = None
         if self.is_running():
             pid = self.process.pid
             try:
@@ -205,16 +207,15 @@ class ManagedServer:
                     lines = rj.stdout.strip().splitlines()
                     if len(lines) >= 2:
                         vals = lines[-1].split()
-                        if len(vals) >= 10:
+                        if len(vals) >= 15:
                             s0c, s1c = float(vals[0]), float(vals[1])
                             s0u, s1u = float(vals[2]), float(vals[3])
                             ec,  eu  = float(vals[4]), float(vals[5])
                             oc,  ou  = float(vals[6]), float(vals[7])
-                            mc,  mu  = float(vals[8]), float(vals[9])
                             heap_used_mb  = round((s0u + s1u + eu + ou) / 1024, 1)
                             heap_total_mb = round((s0c + s1c + ec + oc) / 1024, 1)
-                            meta_used_mb  = round(mu / 1024, 1)
-                            meta_total_mb = round(mc / 1024, 1)
+                            ygc = int(float(vals[12]))
+                            fgc = int(float(vals[14]))
             except Exception:
                 pass
         return {
@@ -231,8 +232,8 @@ class ManagedServer:
             "ram_mb":        ram_mb,
             "heap_used_mb":  heap_used_mb,
             "heap_total_mb": heap_total_mb,
-            "meta_used_mb":  meta_used_mb,
-            "meta_total_mb": meta_total_mb,
+            "ygc":           ygc,
+            "fgc":           fgc,
         }
 
 # ── Global state ───────────────────────────────────────────────────────────────
@@ -435,6 +436,14 @@ section+section{margin-top:2rem}
 .fb-toolbar label{font-size:.78rem;color:#7d8590;cursor:pointer;display:flex;align-items:center;gap:.35rem;margin-right:.5rem}
 .fb-body{flex:1;overflow-y:auto;padding:0}
 .fb-foot{padding:.6rem 1.2rem;border-top:1px solid #21262d;font-size:.75rem;color:#7d8590}
+.fb-prog{padding:.5rem 1.2rem;border-bottom:1px solid #21262d;display:none;align-items:center;gap:.7rem;flex-shrink:0;background:#0d1117}
+.fb-prog.show{display:flex}
+.fb-prog-label{font-size:.78rem;color:#c9d1d9;white-space:nowrap;min-width:130px}
+.fb-prog-track{flex:1;height:6px;background:#21262d;border-radius:3px;overflow:hidden}
+.fb-prog-fill{height:100%;border-radius:3px;background:#1f6feb;width:0%;transition:width .15s}
+.fb-prog-fill.indet{width:35%;animation:fb-indet 1.4s ease-in-out infinite}
+@keyframes fb-indet{0%{margin-left:-35%}60%{margin-left:80%}100%{margin-left:105%}}
+.fb-prog-val{font-size:.74rem;color:#7d8590;white-space:nowrap;min-width:90px;text-align:right}
 .fb-table{width:100%;border-collapse:collapse}
 .fb-table th{text-align:left;padding:.5rem 1rem;font-size:.75rem;font-weight:600;
   color:#7d8590;border-bottom:1px solid #21262d;position:sticky;top:0;background:#161b22}
@@ -470,7 +479,12 @@ section+section{margin-top:2rem}
 .heap-fill{background:#7c3aed}
 .heap-fill.hi{background:#e3b341}
 .heap-fill.crit{background:#f85149}
-.meta-fill{background:#0e7490}
+.heap-graph{margin-top:.45rem}
+.heap-graph svg{display:block;width:100%;height:64px;border-radius:4px;background:#0a0c10}
+.heap-legend{display:flex;gap:.8rem;margin-top:.25rem;font-size:.68rem;color:#484f58}
+.heap-legend span{display:flex;align-items:center;gap:.3rem}
+.hl-young{display:inline-block;width:12px;height:2px;background:#e3b341;border-radius:1px}
+.hl-full{display:inline-block;width:12px;height:2px;background:#f85149;border-radius:1px}
 .usage-val{font-size:.72rem;color:#7d8590;white-space:nowrap;min-width:90px;text-align:right}
 
 /* ── Flash ── */
@@ -575,6 +589,11 @@ section+section{margin-top:2rem}
       <button class="btn bg-danger" onclick="delSelected()" id="fb-del">&#128465; Delete</button>
       <span id="fb-sel-info" style="margin-left:auto;font-size:.75rem;color:#7d8590"></span>
     </div>
+    <div class="fb-prog" id="fb-prog">
+      <span class="fb-prog-label" id="fb-prog-label">Working…</span>
+      <div class="fb-prog-track"><div class="fb-prog-fill" id="fb-prog-fill"></div></div>
+      <span class="fb-prog-val"  id="fb-prog-val"></span>
+    </div>
     <div class="fb-body">
       <table class="fb-table">
         <thead><tr>
@@ -595,6 +614,60 @@ section+section{margin-top:2rem}
 <script>
 let fb = { sid: null, path: '', sel: new Set(), entries: [] };
 let _servers = [];
+const _heapHist = {};   // { sid: [{used, total, ygc, fgc, gcY, gcF}] }
+const HEAP_PTS  = 60;   // ~5 min at 5 s refresh
+
+function updateHeapGraph(s) {
+  const sid = s.id;
+  if (!_heapHist[sid]) _heapHist[sid] = [];
+  const hist = _heapHist[sid];
+
+  if (s.heap_used_mb !== null) {
+    const prev = hist.length ? hist[hist.length - 1] : null;
+    hist.push({
+      used: s.heap_used_mb,
+      total: s.heap_total_mb,
+      ygc:  s.ygc || 0,
+      fgc:  s.fgc || 0,
+      gcY:  prev !== null && s.ygc > prev.ygc,
+      gcF:  prev !== null && s.fgc > prev.fgc,
+    });
+    if (hist.length > HEAP_PTS) hist.shift();
+  }
+
+  const svg = document.getElementById('hg-' + sid);
+  if (!svg || hist.length < 2) return;
+
+  const W = 300, H = 64;
+  const maxV = Math.max(...hist.map(p => p.total || p.used), 1);
+  const xi = (i) => ((HEAP_PTS - hist.length + i) / (HEAP_PTS - 1)) * W;
+  const yi = (v) => H - 2 - (v / maxV) * (H - 4);
+
+  const pts = hist.map((p, i) => xi(i).toFixed(1) + ',' + yi(p.used).toFixed(1)).join(' ');
+  const x0 = xi(0).toFixed(1), xN = xi(hist.length - 1).toFixed(1);
+
+  let out = '';
+
+  // GC marker lines
+  hist.forEach((p, i) => {
+    if (!p.gcY && !p.gcF) return;
+    const x = xi(i).toFixed(1);
+    const col = p.gcF ? '#f85149' : '#e3b341';
+    out += '<line x1="' + x + '" y1="0" x2="' + x + '" y2="' + H + '" stroke="' + col + '" stroke-width="1.5" opacity=".6"/>';
+  });
+
+  // Filled area under the line
+  out += '<polygon points="' + x0 + ',' + H + ' ' + pts + ' ' + xN + ',' + H + '" fill="#7c3aed" opacity=".18"/>';
+
+  // Line itself
+  out += '<polyline points="' + pts + '" fill="none" stroke="#7c3aed" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>';
+
+  svg.innerHTML = out;
+}
+
+function updateAllHeapGraphs(list) {
+  for (const s of list) updateHeapGraph(s);
+}
 
 // ── Utilities ──────────────────────────────────────────────────────────────────
 
@@ -657,7 +730,7 @@ function cardHTML(s) {
       ${(()=>{if(s.cpu_pct===null)return '<div class="usage-row"><span class="usage-label">CPU</span><div class="usage-bar"></div><span class="usage-val" style="color:#484f58">—</span></div>';const pct=Math.min(s.cpu_pct,100);return '<div class="usage-row"><span class="usage-label">CPU</span><div class="usage-bar"><div class="usage-fill cpu-fill" style="width:'+pct+'%"></div></div><span class="usage-val">'+s.cpu_pct.toFixed(1)+'%</span></div>';})()}
       ${(()=>{if(s.ram_mb===null)return '<div class="usage-row"><span class="usage-label">RAM</span><div class="usage-bar"></div><span class="usage-val" style="color:#484f58">—</span></div>';const pct=Math.min(s.memory_max_mb?Math.round(s.ram_mb/s.memory_max_mb*100):0,100);const cls=pct>=90?'crit':pct>=75?'hi':'';return '<div class="usage-row"><span class="usage-label">RAM</span><div class="usage-bar"><div class="usage-fill ram-fill '+cls+'" style="width:'+pct+'%"></div></div><span class="usage-val">'+s.ram_mb+' / '+s.memory_max_mb+' MB</span></div>';})()}
       ${(()=>{if(s.heap_used_mb===null)return '<div class="usage-row"><span class="usage-label">Heap</span><div class="usage-bar"></div><span class="usage-val" style="color:#484f58">—</span></div>';const pct=Math.min(s.heap_total_mb?Math.round(s.heap_used_mb/s.heap_total_mb*100):0,100);const cls=pct>=90?'crit':pct>=75?'hi':'';return '<div class="usage-row"><span class="usage-label">Heap</span><div class="usage-bar"><div class="usage-fill heap-fill '+cls+'" style="width:'+pct+'%"></div></div><span class="usage-val">'+s.heap_used_mb+' / '+s.heap_total_mb+' MB</span></div>';})()}
-      ${(()=>{if(s.meta_used_mb===null)return '<div class="usage-row"><span class="usage-label">Meta</span><div class="usage-bar"></div><span class="usage-val" style="color:#484f58">—</span></div>';const pct=Math.min(s.meta_total_mb?Math.round(s.meta_used_mb/s.meta_total_mb*100):0,100);return '<div class="usage-row"><span class="usage-label">Meta</span><div class="usage-bar"><div class="usage-fill meta-fill" style="width:'+pct+'%"></div></div><span class="usage-val">'+s.meta_used_mb+' MB</span></div>';})()}
+      <div class="heap-graph"><svg id="hg-${s.id}" viewBox="0 0 300 64" preserveAspectRatio="none"></svg><div class="heap-legend"><span><i class="hl-young"></i>Young GC</span><span><i class="hl-full"></i>Full GC</span></div></div>
     </div>
   </div>
   <div class="card-con">
@@ -762,6 +835,7 @@ async function refresh() {
     if (d.sysinfo)    renderSysinfo(d.sysinfo);
     document.getElementById('upd').textContent = 'Updated ' + new Date().toLocaleTimeString();
     fetchAllLogs(d.servers || []);
+    updateAllHeapGraphs(d.servers || []);
   } catch {
     document.getElementById('upd').textContent = 'Connection lost';
   }
@@ -1013,24 +1087,49 @@ function dlSelected() {
   dlZip();
 }
 
+// ── File browser progress helpers ──────────────────────────────────────────────
+
+function fbProgShow(label, indet = false) {
+  document.getElementById('fb-prog').classList.add('show');
+  document.getElementById('fb-prog-label').textContent = label;
+  document.getElementById('fb-prog-val').textContent   = '';
+  const fill = document.getElementById('fb-prog-fill');
+  fill.style.width = '0%';
+  fill.classList.toggle('indet', indet);
+}
+function fbProgSet(pct, val = '') {
+  const fill = document.getElementById('fb-prog-fill');
+  fill.classList.remove('indet');
+  fill.style.width = Math.min(pct, 100) + '%';
+  if (val !== '') document.getElementById('fb-prog-val').textContent = val;
+}
+function fbProgHide() {
+  document.getElementById('fb-prog').classList.remove('show');
+  const fill = document.getElementById('fb-prog-fill');
+  fill.classList.remove('indet');
+  fill.style.width = '0%';
+}
+
 async function dlZip() {
   const names = fb.sel.size
     ? [...fb.sel].map(f => fb.path ? fb.path + '/' + f : f)
     : fb.entries.filter(e => e.type === 'file').map(e => fb.path ? fb.path + '/' + e.name : e.name);
   if (!names.length) { flash('No files to download', true); return; }
-  const r = await fetch(`/api/${fb.sid}/zip`, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({files: names}),
-  });
-  if (!r.ok) { flash('ZIP failed', true); return; }
-  const blob = await r.blob();
-  const url  = URL.createObjectURL(blob);
-  const a    = Object.assign(document.createElement('a'), {
-    href: url, download: `${fb.sid}-files.zip`
-  });
-  a.click();
-  URL.revokeObjectURL(url);
+  fbProgShow('Preparing ZIP…', true);
+  try {
+    const r = await fetch(`/api/${fb.sid}/zip`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({files: names}),
+    });
+    if (!r.ok) { fbProgHide(); flash('ZIP failed', true); return; }
+    fbProgSet(100, 'Saving…');
+    const blob = await r.blob();
+    fbProgHide();
+    const url = URL.createObjectURL(blob);
+    Object.assign(document.createElement('a'), { href: url, download: `${fb.sid}-files.zip` }).click();
+    URL.revokeObjectURL(url);
+  } catch { fbProgHide(); flash('ZIP failed', true); }
 }
 
 async function doUpload() {
@@ -1038,26 +1137,42 @@ async function doUpload() {
   if (!input.files.length) return;
   const form = new FormData();
   for (const f of input.files) form.append('files', f, f.name);
-  const r = await fetch(`/api/${fb.sid}/upload?path=${encodeURIComponent(fb.path)}`, {
-    method: 'POST', body: form,
-  });
-  input.value = '';
-  const d = await r.json();
-  if (d.ok) flash(`Uploaded ${d.count} file(s)`);
-  else flash(d.error, true);
-  loadDir(fb.path);
+  fbProgShow('Uploading…');
+  try {
+    const d = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.upload.onprogress = e => {
+        if (!e.lengthComputable) return;
+        const mb = v => (v / 1048576).toFixed(1);
+        fbProgSet(e.loaded / e.total * 100, mb(e.loaded) + ' / ' + mb(e.total) + ' MB');
+      };
+      xhr.onload  = () => { try { resolve(JSON.parse(xhr.responseText)); } catch { reject(); } };
+      xhr.onerror = () => reject();
+      xhr.open('POST', '/api/' + fb.sid + '/upload?path=' + encodeURIComponent(fb.path));
+      xhr.send(form);
+    });
+    fbProgHide();
+    input.value = '';
+    if (d.ok) flash('Uploaded ' + d.count + ' file(s)');
+    else flash(d.error, true);
+    loadDir(fb.path);
+  } catch { fbProgHide(); input.value = ''; flash('Upload failed', true); }
 }
 
 async function delSelected() {
   const names = [...fb.sel];
   if (!names.length) return;
   if (!confirm(`Delete ${names.length} item(s)? This cannot be undone.`)) return;
-  let failed = 0;
+  let done = 0, failed = 0;
+  fbProgShow('Deleting…');
+  fbProgSet(0, '0 / ' + names.length);
   for (const name of names) {
     const p = fb.path ? fb.path + '/' + name : name;
     const r = await api('DELETE', `/api/${fb.sid}/file?path=${encodeURIComponent(p)}`);
     if (!r.ok) failed++;
+    fbProgSet(++done / names.length * 100, done + ' / ' + names.length);
   }
+  fbProgHide();
   flash(failed ? `Done (${failed} failed)` : `Deleted ${names.length} item(s)`, !!failed);
   loadDir(fb.path);
 }
