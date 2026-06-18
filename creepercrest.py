@@ -902,16 +902,9 @@ function startRefresh() {
   const input = document.getElementById('refresh-secs');
   const secs  = Math.max(1, parseInt(input.value) || 5);
   input.value = secs;
-  localStorage.setItem('mcm-refresh', secs);
   clearInterval(_refreshTimer);
   _refreshTimer = setInterval(refresh, secs * 1000);
 }
-
-// Restore saved interval (falls back to server-configured default)
-(function () {
-  const saved = parseInt(localStorage.getItem('mcm-refresh'));
-  if (saved >= 1) document.getElementById('refresh-secs').value = saved;
-})();
 
 document.getElementById('refresh-secs').addEventListener('change', startRefresh);
 
