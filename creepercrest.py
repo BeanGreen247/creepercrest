@@ -402,7 +402,7 @@ section+section{margin-top:2rem}
 .upload-btn input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;font-size:100px}
 
 /* ── Usage bars ── */
-.usage-bars{margin-bottom:.7rem}
+.usage-bars{margin-top:.6rem}
 .usage-row{display:flex;align-items:center;gap:.5rem;margin-bottom:.32rem}
 .usage-label{font-size:.72rem;color:#7d8590;width:30px;flex-shrink:0}
 .usage-bar{flex:1;height:6px;background:#21262d;border-radius:3px;overflow:hidden}
@@ -558,24 +558,6 @@ function cardHTML(s) {
     <div class="info">
       <b>Dir</b> ${esc(s.directory)}&nbsp;&nbsp;<b>JAR</b> ${esc(s.jar)}${s.pid?`&nbsp;&nbsp;<b>PID</b> ${s.pid}`:''}
     </div>
-    ${run && s.cpu_pct !== null ? `<div class="usage-bars">
-      <div class="usage-row">
-        <span class="usage-label">CPU</span>
-        <div class="usage-bar"><div class="usage-fill cpu-fill" style="width:${Math.min(s.cpu_pct,100)}%"></div></div>
-        <span class="usage-val">${s.cpu_pct.toFixed(1)}%</span>
-      </div>
-      <div class="usage-row">
-        <span class="usage-label">RAM</span>
-        ${(()=>{const pct=s.memory_max_mb?Math.round(s.ram_mb/s.memory_max_mb*100):0;const cls=pct>=90?'crit':pct>=75?'hi':'';return `<div class="usage-bar"><div class="usage-fill ram-fill ${cls}" style="width:${Math.min(pct,100)}%"></div></div><span class="usage-val">${s.ram_mb} / ${s.memory_max_mb} MB</span>`})()}
-      </div>
-      ${s.heap_used_mb !== null ? (()=>{
-        const hp=Math.min(s.heap_total_mb?Math.round(s.heap_used_mb/s.heap_total_mb*100):0,100);
-        const hc=hp>=90?'crit':hp>=75?'hi':'';
-        const mp=Math.min(s.meta_total_mb?Math.round(s.meta_used_mb/s.meta_total_mb*100):0,100);
-        return '<div class="usage-row"><span class="usage-label">Heap</span><div class="usage-bar"><div class="usage-fill heap-fill '+hc+'" style="width:'+hp+'%"></div></div><span class="usage-val">'+s.heap_used_mb+' / '+s.heap_total_mb+' MB</span></div>'
-             + '<div class="usage-row"><span class="usage-label">Meta</span><div class="usage-bar"><div class="usage-fill meta-fill" style="width:'+mp+'%"></div></div><span class="usage-val">'+s.meta_used_mb+' MB</span></div>';
-      })() : ''}
-    </div>` : ''}
     <div class="ram-row">
       <label>Min RAM</label>
       <input id="min-${s.id}" type="number" value="${s.memory_min_mb}" min="256" step="256"/>
@@ -594,6 +576,12 @@ function cardHTML(s) {
       <button class="btn bg-yellow" onclick="doBackup('${s.id}',this)">&#128190; Backup</button>
       <button class="btn bg-gray"   onclick="openEdit('${s.id}')">&#9998; Edit</button>
       <button class="btn bg-danger" onclick="delServer('${s.id}')">Remove</button>
+    </div>
+    <div class="usage-bars">
+      ${(()=>{if(s.cpu_pct===null)return '<div class="usage-row"><span class="usage-label">CPU</span><div class="usage-bar"></div><span class="usage-val" style="color:#484f58">—</span></div>';const pct=Math.min(s.cpu_pct,100);return '<div class="usage-row"><span class="usage-label">CPU</span><div class="usage-bar"><div class="usage-fill cpu-fill" style="width:'+pct+'%"></div></div><span class="usage-val">'+s.cpu_pct.toFixed(1)+'%</span></div>';})()}
+      ${(()=>{if(s.ram_mb===null)return '<div class="usage-row"><span class="usage-label">RAM</span><div class="usage-bar"></div><span class="usage-val" style="color:#484f58">—</span></div>';const pct=Math.min(s.memory_max_mb?Math.round(s.ram_mb/s.memory_max_mb*100):0,100);const cls=pct>=90?'crit':pct>=75?'hi':'';return '<div class="usage-row"><span class="usage-label">RAM</span><div class="usage-bar"><div class="usage-fill ram-fill '+cls+'" style="width:'+pct+'%"></div></div><span class="usage-val">'+s.ram_mb+' / '+s.memory_max_mb+' MB</span></div>';})()}
+      ${(()=>{if(s.heap_used_mb===null)return '<div class="usage-row"><span class="usage-label">Heap</span><div class="usage-bar"></div><span class="usage-val" style="color:#484f58">—</span></div>';const pct=Math.min(s.heap_total_mb?Math.round(s.heap_used_mb/s.heap_total_mb*100):0,100);const cls=pct>=90?'crit':pct>=75?'hi':'';return '<div class="usage-row"><span class="usage-label">Heap</span><div class="usage-bar"><div class="usage-fill heap-fill '+cls+'" style="width:'+pct+'%"></div></div><span class="usage-val">'+s.heap_used_mb+' / '+s.heap_total_mb+' MB</span></div>';})()}
+      ${(()=>{if(s.meta_used_mb===null)return '<div class="usage-row"><span class="usage-label">Meta</span><div class="usage-bar"></div><span class="usage-val" style="color:#484f58">—</span></div>';const pct=Math.min(s.meta_total_mb?Math.round(s.meta_used_mb/s.meta_total_mb*100):0,100);return '<div class="usage-row"><span class="usage-label">Meta</span><div class="usage-bar"><div class="usage-fill meta-fill" style="width:'+pct+'%"></div></div><span class="usage-val">'+s.meta_used_mb+' MB</span></div>';})()}
     </div>
   </div>
   <div class="card-con">
