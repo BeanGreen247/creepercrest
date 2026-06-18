@@ -44,11 +44,14 @@ _sysinfo_cache = {
     'cpu_pct': None, 'ram_used_mb': None, 'ram_total_mb': None,
     'disk_used_gb': None, 'disk_total_gb': None,
 }
-_cpu_stat_prev = None  # (idle_jiffies, total_jiffies)
+_cpu_stat_prev  = None  # (idle_jiffies, total_jiffies)
+_pid_cpu_cache  = {}    # { pid: cpu_pct }
+_pid_cpu_prev   = {}    # { pid: (proc_jiffies, sys_total_jiffies) }
 
 def _sysinfo_sampler():
-    global _cpu_stat_prev, _sysinfo_cache
+    global _cpu_stat_prev, _sysinfo_cache, _pid_cpu_prev, _pid_cpu_cache
     while True:
+        sys_total = None
         try:
             with open('/proc/stat') as f:
                 raw = f.readline().split()[1:]      # all fields: user nice sys idle iowait irq softirq steal …
@@ -56,6 +59,7 @@ def _sysinfo_sampler():
             # guest/guest_nice are already counted inside user/nice — exclude to avoid double-counting
             idle  = vals[3] + vals[4]               # idle + iowait
             total = sum(vals[:8])                   # user nice sys idle iowait irq softirq steal
+            sys_total = total
             if _cpu_stat_prev is not None:
                 d_idle, d_total = idle - _cpu_stat_prev[0], total - _cpu_stat_prev[1]
                 if d_total > 0:
@@ -63,6 +67,34 @@ def _sysinfo_sampler():
             _cpu_stat_prev = (idle, total)
         except Exception:
             pass
+        # Per-process CPU using /proc/<pid>/stat deltas against the same system total
+        if sys_total is not None:
+            active_pids = set()
+            for srv in list(servers.values()):
+                if not srv.is_running():
+                    continue
+                pid = srv.process.pid
+                active_pids.add(pid)
+                try:
+                    with open(f'/proc/{pid}/stat') as f:
+                        data = f.read()
+                    # comm field may contain spaces; parse past closing paren
+                    rest = data[data.rfind(')') + 2:].split()
+                    proc_time = int(rest[11]) + int(rest[12])  # utime + stime
+                    if pid in _pid_cpu_prev:
+                        prev_proc, prev_total = _pid_cpu_prev[pid]
+                        d_proc  = proc_time - prev_proc
+                        d_total = sys_total  - prev_total
+                        if d_total > 0:
+                            _pid_cpu_cache[pid] = round(100.0 * d_proc / d_total, 1)
+                    _pid_cpu_prev[pid] = (proc_time, sys_total)
+                except Exception:
+                    pass
+            # Clean up stale entries
+            for pid in list(_pid_cpu_cache):
+                if pid not in active_pids:
+                    _pid_cpu_cache.pop(pid, None)
+                    _pid_cpu_prev.pop(pid, None)
         try:
             info = {}
             with open('/proc/meminfo') as f:
@@ -186,16 +218,13 @@ class ManagedServer:
         fgc           = None
         if self.is_running():
             pid = self.process.pid
+            cpu_pct = _pid_cpu_cache.get(pid)
             try:
-                r = subprocess.run(
-                    ["ps", "-p", str(pid), "-o", "%cpu,rss", "--no-headers"],
-                    capture_output=True, text=True, timeout=2,
-                )
-                if r.returncode == 0:
-                    parts = r.stdout.split()
-                    if len(parts) >= 2:
-                        cpu_pct = round(float(parts[0]), 1)
-                        ram_mb  = int(parts[1]) // 1024
+                with open(f'/proc/{pid}/status') as f:
+                    for line in f:
+                        if line.startswith('VmRSS:'):
+                            ram_mb = int(line.split()[1]) // 1024
+                            break
             except Exception:
                 pass
             try:
