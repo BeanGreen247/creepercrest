@@ -395,12 +395,12 @@ section+section{margin-top:2rem}
   </section>
 </main>
 
-<!-- Add server overlay -->
+<!-- Add / Edit server overlay -->
 <div class="overlay" id="add-overlay">
   <div class="modal">
-    <h3>Add Server</h3>
+    <h3 id="modal-title">Add Server</h3>
     <div class="frow-2">
-      <div class="frow"><label>ID (letters, numbers, dash)</label><input id="f-id" placeholder="survival"/></div>
+      <div class="frow" id="f-id-wrap"><label>ID (letters, numbers, dash)</label><input id="f-id" placeholder="survival"/></div>
       <div class="frow"><label>Display Name</label><input id="f-name" placeholder="Survival SMP"/></div>
     </div>
     <div class="frow"><label>Server Directory (full path)</label><input id="f-dir" placeholder="/home/crafty/servers/survival"/></div>
@@ -412,7 +412,7 @@ section+section{margin-top:2rem}
     <div class="frow"><label>Extra JVM args</label><input id="f-args" value="-XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:MaxGCPauseMillis=200"/></div>
     <div class="modal-btns">
       <button class="btn bg-gray" onclick="closeAdd()">Cancel</button>
-      <button class="btn bg-green" onclick="submitAdd()">Add Server</button>
+      <button class="btn bg-green" id="modal-submit-btn" onclick="submitModal()">Add Server</button>
     </div>
   </div>
 </div>
@@ -455,6 +455,7 @@ section+section{margin-top:2rem}
 
 <script>
 let fb = { sid: null, path: '', sel: new Set(), entries: [] };
+let _servers = [];
 
 // ── Utilities ──────────────────────────────────────────────────────────────────
 
@@ -510,6 +511,7 @@ function cardHTML(s) {
       <button class="btn bg-blue"   onclick="act('${s.id}','restart')">&#8635; Restart</button>
       <button class="btn bg-teal"   onclick="openFB('${s.id}')">&#128193; Files</button>
       <button class="btn bg-yellow" onclick="doBackup('${s.id}',this)">&#128190; Backup</button>
+      <button class="btn bg-gray"   onclick="openEdit('${s.id}')">&#9998; Edit</button>
       <button class="btn bg-danger" onclick="delServer('${s.id}')">Remove</button>
     </div>
   </div>
@@ -586,7 +588,8 @@ async function delBackups() {
 async function refresh() {
   try {
     const d = await api('GET', '/api/status');
-    renderServers(d.servers || []);
+    _servers = d.servers || [];
+    renderServers(_servers);
     renderBackups(d.backups || []);
     if (d.backup_dir) document.getElementById('bak-dir').textContent = d.backup_dir;
     document.getElementById('upd').textContent = 'Updated ' + new Date().toLocaleTimeString();
@@ -655,21 +658,55 @@ async function delServer(sid) {
   refresh();
 }
 
-// ── Add server modal ───────────────────────────────────────────────────────────
+// ── Add / Edit server modal ────────────────────────────────────────────────────
 
-function openAdd()  { document.getElementById('add-overlay').classList.add('open'); }
+let _editSid = null;
+
+function openAdd() {
+  _editSid = null;
+  document.getElementById('modal-title').textContent = 'Add Server';
+  document.getElementById('modal-submit-btn').textContent = 'Add Server';
+  document.getElementById('f-id-wrap').style.display = '';
+  document.getElementById('f-id').value   = '';
+  document.getElementById('f-name').value = '';
+  document.getElementById('f-dir').value  = '';
+  document.getElementById('f-jar').value  = 'server.jar';
+  document.getElementById('f-min').value  = '512';
+  document.getElementById('f-max').value  = '2048';
+  document.getElementById('f-args').value = '-XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:MaxGCPauseMillis=200';
+  document.getElementById('add-overlay').classList.add('open');
+}
+
+function openEdit(sid) {
+  const s = _servers.find(x => x.id === sid);
+  if (!s) return;
+  _editSid = sid;
+  document.getElementById('modal-title').textContent = `Edit Server — ${s.name}`;
+  document.getElementById('modal-submit-btn').textContent = 'Save Changes';
+  document.getElementById('f-id-wrap').style.display = 'none';
+  document.getElementById('f-name').value = s.name;
+  document.getElementById('f-dir').value  = s.directory;
+  document.getElementById('f-jar').value  = s.jar;
+  document.getElementById('f-min').value  = s.memory_min_mb;
+  document.getElementById('f-max').value  = s.memory_max_mb;
+  document.getElementById('f-args').value = s.extra_args || '';
+  document.getElementById('add-overlay').classList.add('open');
+}
+
 function closeAdd() { document.getElementById('add-overlay').classList.remove('open'); }
+
+function submitModal() { _editSid ? submitEdit() : submitAdd(); }
 
 async function submitAdd() {
   const g = id => document.getElementById(id).value.trim();
   const body = {
-    id:         g('f-id'),
-    name:       g('f-name'),
-    directory:  g('f-dir'),
-    jar:        g('f-jar') || 'server.jar',
+    id:            g('f-id'),
+    name:          g('f-name'),
+    directory:     g('f-dir'),
+    jar:           g('f-jar') || 'server.jar',
     memory_min_mb: parseInt(g('f-min')) || 512,
     memory_max_mb: parseInt(g('f-max')) || 2048,
-    extra_args: g('f-args'),
+    extra_args:    g('f-args'),
   };
   if (!body.id)        { flash('ID is required', true); return; }
   if (!body.directory) { flash('Directory is required', true); return; }
@@ -678,6 +715,26 @@ async function submitAdd() {
   if (!r.ok) { flash(r.error, true); return; }
   closeAdd();
   flash(`Server "${body.name || body.id}" added`);
+  refresh();
+}
+
+async function submitEdit() {
+  const g = id => document.getElementById(id).value.trim();
+  const sid = _editSid;
+  const body = {
+    name:          g('f-name'),
+    directory:     g('f-dir'),
+    jar:           g('f-jar') || 'server.jar',
+    memory_min_mb: parseInt(g('f-min')) || 512,
+    memory_max_mb: parseInt(g('f-max')) || 2048,
+    extra_args:    g('f-args'),
+  };
+  if (!body.directory) { flash('Directory is required', true); return; }
+  if (body.memory_min_mb > body.memory_max_mb) { flash('Max RAM must be ≥ Min RAM', true); return; }
+  const r = await api('POST', `/api/${sid}/config`, body);
+  if (!r.ok) { flash(r.error || r.msg, true); return; }
+  closeAdd();
+  flash(`"${body.name || sid}" saved — restart server to apply changes`);
   refresh();
 }
 
@@ -1078,12 +1135,20 @@ class Handler(BaseHTTPRequestHandler):
                 ok, result = do_backup(sid)
                 return self.send_json({"ok": ok, "result": result})
             elif action == "config":
+                if "name" in b and b["name"].strip():
+                    srv.cfg["name"] = b["name"].strip()
+                if "directory" in b and b["directory"].strip():
+                    srv.cfg["directory"] = b["directory"].strip()
+                if "jar" in b:
+                    srv.cfg["jar"] = b["jar"].strip() or "server.jar"
                 if "memory_min_mb" in b:
                     srv.cfg["memory_min_mb"] = max(256, int(b["memory_min_mb"]))
                 if "memory_max_mb" in b:
                     srv.cfg["memory_max_mb"] = max(256, int(b["memory_max_mb"]))
                 if "extra_args" in b:
                     srv.cfg["extra_args"] = b["extra_args"]
+                if srv.cfg.get("memory_min_mb", 256) > srv.cfg.get("memory_max_mb", 256):
+                    return self.send_json({"error": "max RAM must be >= min RAM"}, 400)
                 cfg["servers"][sid] = srv.cfg
                 save_cfg(cfg)
                 ok, msg = True, "Saved"
