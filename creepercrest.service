@@ -1,0 +1,13 @@
+[Unit]
+Description=CreeperCrest - Minecraft Server Manager
+After=network.target
+
+[Service]
+User=crafty
+WorkingDirectory=/home/crafty/creepercrest
+ExecStart=python3 /home/crafty/creepercrest/creepercrest.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
