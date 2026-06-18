@@ -61,6 +61,7 @@ Then open `http://<your-server-ip>:8888` in a browser.
   "host": "0.0.0.0",
   "port": 8888,
   "backup_dir": "~/mc-backups",
+  "refresh_interval": 5,
   "servers": {}
 }
 ```
@@ -70,6 +71,7 @@ Then open `http://<your-server-ip>:8888` in a browser.
 | `host` | Interface to listen on. `0.0.0.0` = all interfaces |
 | `port` | Web UI port |
 | `backup_dir` | Where zip backups are saved. `~` resolves to the running user's home |
+| `refresh_interval` | How often the UI polls for status updates, in seconds (default: `5`) |
 | `servers` | Managed automatically by the UI — do not edit by hand |
 
 ## Adding a Server
