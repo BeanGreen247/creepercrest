@@ -6,6 +6,7 @@ import sys
 import io
 import json
 import zipfile
+import time
 import threading
 import subprocess
 from datetime import datetime
@@ -39,48 +40,47 @@ def save_cfg(data):
 
 # ── System info ────────────────────────────────────────────────────────────────
 
-_cpu_prev = None  # (idle_jiffies, total_jiffies) from last call
+_sysinfo_cache = {
+    'cpu_pct': None, 'ram_used_mb': None, 'ram_total_mb': None,
+    'disk_used_gb': None, 'disk_total_gb': None,
+}
+_cpu_stat_prev = None  # (idle_jiffies, total_jiffies)
+
+def _sysinfo_sampler():
+    global _cpu_stat_prev, _sysinfo_cache
+    while True:
+        try:
+            with open('/proc/stat') as f:
+                vals = list(map(int, f.readline().split()[1:8]))
+            idle  = vals[3] + vals[4]   # idle + iowait
+            total = sum(vals)
+            if _cpu_stat_prev is not None:
+                d_idle, d_total = idle - _cpu_stat_prev[0], total - _cpu_stat_prev[1]
+                if d_total > 0:
+                    _sysinfo_cache['cpu_pct'] = round(100.0 * (1.0 - d_idle / d_total), 1)
+            _cpu_stat_prev = (idle, total)
+        except Exception:
+            pass
+        try:
+            info = {}
+            with open('/proc/meminfo') as f:
+                for line in f:
+                    k, v = line.split(':')
+                    info[k.strip()] = int(v.split()[0])
+            _sysinfo_cache['ram_total_mb'] = info['MemTotal'] // 1024
+            _sysinfo_cache['ram_used_mb']  = (info['MemTotal'] - info['MemAvailable']) // 1024
+        except Exception:
+            pass
+        try:
+            st = os.statvfs('/')
+            _sysinfo_cache['disk_total_gb'] = round(st.f_blocks * st.f_frsize / 1_073_741_824, 1)
+            _sysinfo_cache['disk_used_gb']  = round((st.f_blocks - st.f_bavail) * st.f_frsize / 1_073_741_824, 1)
+        except Exception:
+            pass
+        time.sleep(2)
 
 def _get_sysinfo():
-    global _cpu_prev
-    cpu_pct = None
-    try:
-        with open('/proc/stat') as f:
-            vals = list(map(int, f.readline().split()[1:8]))
-        idle  = vals[3] + vals[4]   # idle + iowait
-        total = sum(vals)
-        if _cpu_prev is not None:
-            d_idle, d_total = idle - _cpu_prev[0], total - _cpu_prev[1]
-            if d_total > 0:
-                cpu_pct = round(100.0 * (1.0 - d_idle / d_total), 1)
-        _cpu_prev = (idle, total)
-    except Exception:
-        pass
-    ram_used_mb = ram_total_mb = None
-    try:
-        info = {}
-        with open('/proc/meminfo') as f:
-            for line in f:
-                k, v = line.split(':')
-                info[k.strip()] = int(v.split()[0])
-        ram_total_mb = info['MemTotal'] // 1024
-        ram_used_mb  = (info['MemTotal'] - info['MemAvailable']) // 1024
-    except Exception:
-        pass
-    disk_used_gb = disk_total_gb = None
-    try:
-        st = os.statvfs('/')
-        disk_total_gb = round(st.f_blocks * st.f_frsize / 1_073_741_824, 1)
-        disk_used_gb  = round((st.f_blocks - st.f_bavail) * st.f_frsize / 1_073_741_824, 1)
-    except Exception:
-        pass
-    return {
-        'cpu_pct':      cpu_pct,
-        'ram_used_mb':  ram_used_mb,
-        'ram_total_mb': ram_total_mb,
-        'disk_used_gb': disk_used_gb,
-        'disk_total_gb': disk_total_gb,
-    }
+    return dict(_sysinfo_cache)
 
 # ── Managed server ─────────────────────────────────────────────────────────────
 
@@ -370,9 +370,9 @@ section+section{margin-top:2rem}
 .ram-sep{color:#30363d;font-size:.85rem}
 
 .btn-row{display:flex;flex-wrap:wrap;gap:.45rem;margin-bottom:.85rem}
-.btn-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.45rem;margin:0 auto .45rem;width:min(100%,380px)}
+.btn-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.45rem;margin:0 auto .6rem;width:min(100%,380px)}
 .btn-grid .btn{padding:.6rem .5rem;font-size:.85rem;font-weight:600;width:100%}
-.btn-remove-row{display:flex;justify-content:center;margin-bottom:.6rem}
+.btn-grid .btn-full{grid-column:1/-1}
 .btn{border:none;border-radius:5px;padding:.38rem .8rem;font-size:.8rem;font-weight:500;
   cursor:pointer;transition:opacity .12s}
 .btn:hover{opacity:.8}
@@ -651,9 +651,7 @@ function cardHTML(s) {
       <button class="btn bg-teal"   onclick="openFB('${s.id}')">&#128193; Files</button>
       <button class="btn bg-yellow" onclick="doBackup('${s.id}',this)">&#128190; Backup</button>
       <button class="btn bg-gray"   onclick="openEdit('${s.id}')">&#9998; Edit</button>
-    </div>
-    <div class="btn-remove-row">
-      <button class="btn bg-danger" onclick="delServer('${s.id}')">Remove</button>
+      <button class="btn bg-danger btn-full" onclick="delServer('${s.id}')">Remove</button>
     </div>
     <div class="usage-bars">
       ${(()=>{if(s.cpu_pct===null)return '<div class="usage-row"><span class="usage-label">CPU</span><div class="usage-bar"></div><span class="usage-val" style="color:#484f58">—</span></div>';const pct=Math.min(s.cpu_pct,100);return '<div class="usage-row"><span class="usage-label">CPU</span><div class="usage-bar"><div class="usage-fill cpu-fill" style="width:'+pct+'%"></div></div><span class="usage-val">'+s.cpu_pct.toFixed(1)+'%</span></div>';})()}
@@ -1395,6 +1393,8 @@ def main():
 
     _sig.signal(_sig.SIGTERM, shutdown)
     _sig.signal(_sig.SIGINT,  shutdown)
+
+    threading.Thread(target=_sysinfo_sampler, daemon=True, name='sysinfo').start()
 
     httpd = ThreadingHTTPServer((host, port), Handler)
     print(f"CreeperCrest  →  http://{host}:{port}")
