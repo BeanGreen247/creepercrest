@@ -295,7 +295,7 @@ section+section{margin-top:2rem}
 .card-con{flex:1;min-width:0;display:flex;flex-direction:column}
 .console{background:#0a0c10;border:1px solid #21262d;border-radius:5px;
   padding:.6rem .7rem;overflow-y:auto;font-family:'Consolas',monospace;
-  font-size:.76rem;color:#8b949e;line-height:1.55;flex:1;min-height:220px}
+  font-size:.76rem;color:#8b949e;line-height:1.55;height:420px;flex-shrink:0}
 .console p{white-space:pre-wrap;word-break:break-all}
 .cmd-row{display:flex;gap:.4rem;margin-top:.6rem;flex-shrink:0}
 .cmd-row input[type=text]{flex:1;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;
