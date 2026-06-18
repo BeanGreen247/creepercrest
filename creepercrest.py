@@ -370,6 +370,9 @@ section+section{margin-top:2rem}
 .ram-sep{color:#30363d;font-size:.85rem}
 
 .btn-row{display:flex;flex-wrap:wrap;gap:.45rem;margin-bottom:.85rem}
+.btn-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.45rem;margin-bottom:.45rem}
+.btn-grid .btn{padding:.6rem .5rem;font-size:.85rem;font-weight:600;width:100%}
+.btn-remove-row{display:flex;justify-content:center;margin-bottom:.6rem}
 .btn{border:none;border-radius:5px;padding:.38rem .8rem;font-size:.8rem;font-weight:500;
   cursor:pointer;transition:opacity .12s}
 .btn:hover{opacity:.8}
@@ -641,13 +644,15 @@ function cardHTML(s) {
       <span style="color:#7d8590;font-size:.75rem">MB</span>
       <button class="btn bg-gray" onclick="saveRAM('${s.id}')" style="font-size:.75rem;padding:.3rem .65rem">Save</button>
     </div>
-    <div class="btn-row">
+    <div class="btn-grid">
       <button class="btn bg-green"  ${run?'disabled':''} onclick="act('${s.id}','start')">&#9654; Start</button>
       <button class="btn bg-red"    ${run?'':'disabled'} onclick="act('${s.id}','stop')">&#9632; Stop</button>
       <button class="btn bg-blue"   onclick="act('${s.id}','restart')">&#8635; Restart</button>
       <button class="btn bg-teal"   onclick="openFB('${s.id}')">&#128193; Files</button>
       <button class="btn bg-yellow" onclick="doBackup('${s.id}',this)">&#128190; Backup</button>
       <button class="btn bg-gray"   onclick="openEdit('${s.id}')">&#9998; Edit</button>
+    </div>
+    <div class="btn-remove-row">
       <button class="btn bg-danger" onclick="delServer('${s.id}')">Remove</button>
     </div>
     <div class="usage-bars">
