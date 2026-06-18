@@ -37,6 +37,51 @@ def save_cfg(data):
     with open(CFG_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
+# ── System info ────────────────────────────────────────────────────────────────
+
+_cpu_prev = None  # (idle_jiffies, total_jiffies) from last call
+
+def _get_sysinfo():
+    global _cpu_prev
+    cpu_pct = None
+    try:
+        with open('/proc/stat') as f:
+            vals = list(map(int, f.readline().split()[1:8]))
+        idle  = vals[3] + vals[4]   # idle + iowait
+        total = sum(vals)
+        if _cpu_prev is not None:
+            d_idle, d_total = idle - _cpu_prev[0], total - _cpu_prev[1]
+            if d_total > 0:
+                cpu_pct = round(100.0 * (1.0 - d_idle / d_total), 1)
+        _cpu_prev = (idle, total)
+    except Exception:
+        pass
+    ram_used_mb = ram_total_mb = None
+    try:
+        info = {}
+        with open('/proc/meminfo') as f:
+            for line in f:
+                k, v = line.split(':')
+                info[k.strip()] = int(v.split()[0])
+        ram_total_mb = info['MemTotal'] // 1024
+        ram_used_mb  = (info['MemTotal'] - info['MemAvailable']) // 1024
+    except Exception:
+        pass
+    disk_used_gb = disk_total_gb = None
+    try:
+        st = os.statvfs('/')
+        disk_total_gb = round(st.f_blocks * st.f_frsize / 1_073_741_824, 1)
+        disk_used_gb  = round((st.f_blocks - st.f_bavail) * st.f_frsize / 1_073_741_824, 1)
+    except Exception:
+        pass
+    return {
+        'cpu_pct':      cpu_pct,
+        'ram_used_mb':  ram_used_mb,
+        'ram_total_mb': ram_total_mb,
+        'disk_used_gb': disk_used_gb,
+        'disk_total_gb': disk_total_gb,
+    }
+
 # ── Managed server ─────────────────────────────────────────────────────────────
 
 class ManagedServer:
@@ -401,6 +446,14 @@ section+section{margin-top:2rem}
 .upload-btn{position:relative;overflow:hidden;display:inline-block}
 .upload-btn input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;font-size:100px}
 
+/* ── System stats card ── */
+.sys-card{background:#161b22;border:1px solid #30363d;border-radius:8px;
+  padding:1rem 1.4rem;display:grid;grid-template-columns:repeat(3,1fr);gap:1.4rem}
+.sys-col{display:flex;flex-direction:column;gap:.35rem}
+.sys-col-label{font-size:.7rem;font-weight:600;color:#7d8590;text-transform:uppercase;letter-spacing:.05em}
+.sys-col-val{font-size:.8rem;color:#c9d1d9}
+.sys-card .usage-bar{height:8px}
+
 /* ── Usage bars ── */
 .usage-bars{margin-top:.6rem}
 .usage-row{display:flex;align-items:center;gap:.5rem;margin-bottom:.32rem}
@@ -430,12 +483,32 @@ section+section{margin-top:2rem}
   <h1><svg width="22" height="22" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="vertical-align:-.25rem"><rect width="16" height="16" rx="1" fill="#3d6e28"/><rect x="2" y="3" width="4" height="3" fill="#1a2e0e"/><rect x="10" y="3" width="4" height="3" fill="#1a2e0e"/><rect x="6" y="8" width="4" height="1" fill="#1a2e0e"/><rect x="4" y="9" width="2" height="3" fill="#1a2e0e"/><rect x="10" y="9" width="2" height="3" fill="#1a2e0e"/><rect x="6" y="11" width="4" height="1" fill="#1a2e0e"/></svg> CreeperCrest</h1>
   <div class="refresh-ctrl">
     <label for="refresh-secs">Refresh every</label>
-    <input id="refresh-secs" type="number" min="1" max="300" value="__REFRESH_INTERVAL__"/>
+    <input id="refresh-secs" type="number" min="5" max="300" value="__REFRESH_INTERVAL__"/>
     <span>s</span>
   </div>
   <span id="upd">connecting…</span>
 </header>
 <main>
+  <section>
+    <div class="sec-hdr"><h2>System</h2></div>
+    <div class="sys-card">
+      <div class="sys-col">
+        <span class="sys-col-label">CPU</span>
+        <div id="sys-cpu-bar"><div class="usage-bar"><div class="usage-fill cpu-fill" style="width:0%"></div></div></div>
+        <span class="sys-col-val" id="sys-cpu-val">—</span>
+      </div>
+      <div class="sys-col">
+        <span class="sys-col-label">RAM</span>
+        <div id="sys-ram-bar"><div class="usage-bar"><div class="usage-fill ram-fill" style="width:0%"></div></div></div>
+        <span class="sys-col-val" id="sys-ram-val">—</span>
+      </div>
+      <div class="sys-col">
+        <span class="sys-col-label">Disk /</span>
+        <div id="sys-disk-bar"><div class="usage-bar"><div class="usage-fill heap-fill" style="width:0%"></div></div></div>
+        <span class="sys-col-val" id="sys-disk-val">—</span>
+      </div>
+    </div>
+  </section>
   <section>
     <div class="sec-hdr">
       <h2>Servers</h2>
@@ -654,6 +727,28 @@ async function delBackups() {
   refresh();
 }
 
+function renderSysinfo(sys) {
+  function setBar(barId, fillCls, pct) {
+    const p = Math.min(pct || 0, 100);
+    const c = p >= 90 ? ' crit' : p >= 75 ? ' hi' : '';
+    document.getElementById(barId).innerHTML =
+      '<div class="usage-bar"><div class="usage-fill ' + fillCls + c + '" style="width:' + p + '%"></div></div>';
+  }
+  setBar('sys-cpu-bar', 'cpu-fill',  sys.cpu_pct);
+  document.getElementById('sys-cpu-val').textContent =
+    sys.cpu_pct !== null ? sys.cpu_pct.toFixed(1) + '%' : '—';
+
+  const ramPct = sys.ram_total_mb ? Math.round(sys.ram_used_mb / sys.ram_total_mb * 100) : 0;
+  setBar('sys-ram-bar', 'ram-fill', ramPct);
+  document.getElementById('sys-ram-val').textContent = sys.ram_used_mb !== null
+    ? (sys.ram_used_mb / 1024).toFixed(1) + ' / ' + (sys.ram_total_mb / 1024).toFixed(1) + ' GB' : '—';
+
+  const diskPct = sys.disk_total_gb ? Math.round(sys.disk_used_gb / sys.disk_total_gb * 100) : 0;
+  setBar('sys-disk-bar', 'heap-fill', diskPct);
+  document.getElementById('sys-disk-val').textContent = sys.disk_used_gb !== null
+    ? sys.disk_used_gb + ' / ' + sys.disk_total_gb + ' GB' : '—';
+}
+
 async function refresh() {
   try {
     const d = await api('GET', '/api/status');
@@ -661,6 +756,7 @@ async function refresh() {
     renderServers(_servers);
     renderBackups(d.backups || []);
     if (d.backup_dir) document.getElementById('bak-dir').textContent = d.backup_dir;
+    if (d.sysinfo)    renderSysinfo(d.sysinfo);
     document.getElementById('upd').textContent = 'Updated ' + new Date().toLocaleTimeString();
     fetchAllLogs(d.servers || []);
   } catch {
@@ -969,7 +1065,7 @@ let _refreshTimer = null;
 
 function startRefresh() {
   const input = document.getElementById('refresh-secs');
-  const secs  = Math.max(1, parseInt(input.value) || 5);
+  const secs  = Math.max(5, parseInt(input.value) || 5);
   input.value = secs;
   clearInterval(_refreshTimer);
   _refreshTimer = setInterval(refresh, secs * 1000);
@@ -1038,6 +1134,7 @@ class Handler(BaseHTTPRequestHandler):
                 "servers":    [s.status() for s in servers.values()],
                 "backups":    list_backups(),
                 "backup_dir": os.path.expanduser(cfg.get("backup_dir", "~/mc-backups")),
+                "sysinfo":    _get_sysinfo(),
             })
 
         if len(parts) == 3 and parts[0] == "api" and parts[2] == "logs":
