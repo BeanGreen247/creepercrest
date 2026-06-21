@@ -629,7 +629,7 @@ section+section{margin-top:2rem}
         </label>
         <button class="btn bg-yellow" id="bak-restore" onclick="openRestore()" disabled style="font-size:.78rem;padding:.3rem .65rem">&#9100; Restore</button>
         <button class="btn bg-danger"  id="bak-del"     onclick="delBackups()"  disabled style="font-size:.78rem;padding:.3rem .65rem">&#128465; Delete Selected</button>
-        <button class="btn bg-gray"   onclick="openAutoBackup()" style="font-size:.78rem;padding:.3rem .65rem">&#128336; Schedule</button>
+        <button class="btn bg-gray"   onclick="openAutoBackup()" style="font-size:.78rem;padding:.3rem .65rem">Schedule</button>
       </div>
     </div>
     <div id="blist"><div class="empty">No backups yet.</div></div>
@@ -680,7 +680,7 @@ section+section{margin-top:2rem}
 <!-- Auto-backup schedule overlay -->
 <div class="overlay" id="ab-overlay">
   <div class="modal">
-    <h3>&#128336; Auto-Backup Schedule</h3>
+    <h3>Auto-Backup Schedule</h3>
     <p style="font-size:.82rem;color:#7d8590;margin-bottom:1rem">Automatically backs up <b style="color:#c9d1d9">all servers</b> once a week at the chosen time.</p>
     <div class="frow">
       <label>Enable weekly auto-backup</label>
