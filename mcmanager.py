@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""MCManager — lightweight Minecraft server manager. Zero external dependencies."""
+"""MCManager — lightweight Minecraft server manager. Zero external dependencies.
+By BeanGreen247 — https://github.com/BeanGreen247/creepercrest
+"""
 
 import os
 import sys

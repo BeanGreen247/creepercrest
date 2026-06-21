@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""CreeperCrest — lightweight Minecraft server manager. Zero external dependencies."""
+"""CreeperCrest — lightweight Minecraft server manager. Zero external dependencies.
+By BeanGreen247 — https://github.com/BeanGreen247/creepercrest
+"""
 
 import os
 import sys
 import io
+import re
 import json
 import zipfile
 import time
@@ -257,6 +260,7 @@ class ManagedServer:
             "directory":     self.cfg.get("directory", ""),
             "jar":           self.cfg.get("jar", "server.jar"),
             "extra_args":    self.cfg.get("extra_args", ""),
+            "autostart":     self.cfg.get("autostart", False),
             "cpu_pct":       cpu_pct,
             "ram_mb":        ram_mb,
             "heap_used_mb":  heap_used_mb,
@@ -312,6 +316,57 @@ def list_backups():
             "created": datetime.fromtimestamp(os.path.getmtime(fp)).strftime("%Y-%m-%d %H:%M"),
         })
     return out
+
+def restore_backup(fname, sid):
+    if sid not in servers:
+        return False, "Server not found"
+    if servers[sid].is_running():
+        return False, "Stop the server before restoring"
+    bak_dir = os.path.expanduser(cfg.get("backup_dir", "~/mc-backups"))
+    fpath   = os.path.join(bak_dir, fname)
+    if not fname.endswith(".zip") or not os.path.isfile(fpath):
+        return False, "Backup file not found"
+    dest = os.path.expanduser(servers[sid].cfg.get("directory", ""))
+    if not dest or not os.path.isdir(dest):
+        return False, "Server directory not found"
+    try:
+        with zipfile.ZipFile(fpath, "r") as zf:
+            zf.extractall(dest)
+        servers[sid]._append(f"[CreeperCrest] Restored from backup: {fname}")
+        return True, f"Restored {fname}"
+    except Exception as e:
+        return False, str(e)
+
+# ── Scheduled auto-backup ──────────────────────────────────────────────────────
+
+_WEEKDAYS = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"]
+
+def _autobackup_scheduler():
+    """Runs in a background thread; fires weekly backups at the configured day/time."""
+    last_fired = None
+    while True:
+        time.sleep(60)
+        sched = cfg.get("auto_backup", {})
+        if not sched.get("enabled", False):
+            continue
+        now      = datetime.now()
+        day_name = _WEEKDAYS[now.weekday()]
+        hh, mm   = sched.get("hour", 3), sched.get("minute", 0)
+        if day_name != sched.get("day", "sunday").lower():
+            continue
+        if now.hour != hh or now.minute != mm:
+            continue
+        # Fire once per minute window
+        key = (now.year, now.isocalendar()[1], day_name)
+        if last_fired == key:
+            continue
+        last_fired = key
+        for sid in list(servers):
+            ok, result = do_backup(sid)
+            if ok:
+                print(f"[auto-backup] {sid} → {result['file']} ({result['size_mb']} MB)")
+            else:
+                print(f"[auto-backup] {sid} failed: {result}")
 
 # ── File browser helpers ────────────────────────────────────────────────────────
 
@@ -445,9 +500,10 @@ section+section{margin-top:2rem}
 .modal h3{margin-bottom:1.1rem;color:#f0f6fc;font-size:1rem}
 .frow{margin-bottom:.7rem}
 .frow label{display:block;font-size:.78rem;color:#7d8590;margin-bottom:.3rem}
-.frow input{width:100%;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;
+.frow input,.frow select{width:100%;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;
   padding:.4rem .7rem;border-radius:5px;font-size:.85rem;outline:none}
-.frow input:focus{border-color:#58a6ff}
+.frow input:focus,.frow select:focus{border-color:#58a6ff}
+.frow select option{background:#161b22}
 .frow-2{display:grid;grid-template-columns:1fr 1fr;gap:.7rem}
 .modal-btns{display:flex;gap:.5rem;justify-content:flex-end;margin-top:1.1rem}
 
@@ -527,6 +583,7 @@ section+section{margin-top:2rem}
 <body>
 <header>
   <h1><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160.07292 160.07292" width="22" height="22" aria-hidden="true" style="vertical-align:-.25rem"><rect fill="#3eae30" width="160.07292" height="160.07292"/><g transform="translate(36.947174,215.35194)"><path fill="#000" d="M 14.646575,-93.549115 H 28.820683 V -107.72322 H 57.73586 v 13.985119 H 72.287943 V -136.73289 H 58.019342 v -42.99479 H 86.840026 V -150.907 H 0.0944922 v -28.82068 H 29.009669 v 43.08928 H 14.646575 Z"/></g></svg> CreeperCrest</h1>
+  <a href="https://github.com/BeanGreen247/creepercrest" target="_blank" rel="noopener" style="font-size:.73rem;color:#7d8590;white-space:nowrap">by BeanGreen247</a>
   <div class="refresh-ctrl">
     <label for="refresh-secs">Refresh every</label>
     <input id="refresh-secs" type="number" min="5" max="300" value="__REFRESH_INTERVAL__"/>
@@ -570,12 +627,19 @@ section+section{margin-top:2rem}
         <label style="font-size:.78rem;color:#7d8590;cursor:pointer;display:flex;align-items:center;gap:.3rem">
           <input type="checkbox" id="bak-selall" onchange="toggleBakSelAll(this.checked)" style="accent-color:#58a6ff"> All
         </label>
-        <button class="btn bg-danger" id="bak-del" onclick="delBackups()" disabled style="font-size:.78rem;padding:.3rem .65rem">&#128465; Delete Selected</button>
+        <button class="btn bg-yellow" id="bak-restore" onclick="openRestore()" disabled style="font-size:.78rem;padding:.3rem .65rem">&#9100; Restore</button>
+        <button class="btn bg-danger"  id="bak-del"     onclick="delBackups()"  disabled style="font-size:.78rem;padding:.3rem .65rem">&#128465; Delete Selected</button>
+        <button class="btn bg-gray"   onclick="openAutoBackup()" style="font-size:.78rem;padding:.3rem .65rem">&#128336; Schedule</button>
       </div>
     </div>
     <div id="blist"><div class="empty">No backups yet.</div></div>
   </section>
 </main>
+<footer style="text-align:center;padding:1.2rem 2rem;border-top:1px solid #30363d;margin-top:2rem;font-size:.75rem;color:#484f58">
+  <a href="https://github.com/BeanGreen247/creepercrest" target="_blank" rel="noopener" style="color:#7d8590">CreeperCrest</a>
+  &nbsp;&mdash;&nbsp;
+  <a href="https://github.com/BeanGreen247" target="_blank" rel="noopener" style="color:#7d8590">BeanGreen247</a>
+</footer>
 
 <!-- Add / Edit server overlay -->
 <div class="overlay" id="add-overlay">
@@ -595,6 +659,55 @@ section+section{margin-top:2rem}
     <div class="modal-btns">
       <button class="btn bg-gray" onclick="closeAdd()">Cancel</button>
       <button class="btn bg-green" id="modal-submit-btn" onclick="submitModal()">Add Server</button>
+    </div>
+  </div>
+</div>
+
+<!-- Restore backup overlay -->
+<div class="overlay" id="restore-overlay">
+  <div class="modal">
+    <h3>Restore Backup</h3>
+    <p style="font-size:.82rem;color:#7d8590;margin-bottom:1rem">This will <b style="color:#e3b341">overwrite all files</b> in the server directory. The server must be stopped first.</p>
+    <div class="frow"><label>Backup file</label><input id="restore-fname" readonly style="cursor:default;color:#7d8590"/></div>
+    <div class="frow"><label>Restore to server</label><select id="restore-sid"></select></div>
+    <div class="modal-btns">
+      <button class="btn bg-gray" onclick="closeRestore()">Cancel</button>
+      <button class="btn bg-yellow" onclick="submitRestore()">Restore</button>
+    </div>
+  </div>
+</div>
+
+<!-- Auto-backup schedule overlay -->
+<div class="overlay" id="ab-overlay">
+  <div class="modal">
+    <h3>&#128336; Auto-Backup Schedule</h3>
+    <p style="font-size:.82rem;color:#7d8590;margin-bottom:1rem">Automatically backs up <b style="color:#c9d1d9">all servers</b> once a week at the chosen time.</p>
+    <div class="frow">
+      <label>Enable weekly auto-backup</label>
+      <select id="ab-enabled">
+        <option value="0">Disabled</option>
+        <option value="1">Enabled</option>
+      </select>
+    </div>
+    <div class="frow-2">
+      <div class="frow"><label>Day of week</label>
+        <select id="ab-day">
+          <option>monday</option><option>tuesday</option><option>wednesday</option>
+          <option>thursday</option><option>friday</option><option>saturday</option>
+          <option selected>sunday</option>
+        </select>
+      </div>
+      <div class="frow"><label>Time (24h HH:MM)</label>
+        <div style="display:flex;gap:.4rem">
+          <input id="ab-hour"   type="number" min="0" max="23" value="3"  style="width:60px"/>
+          <span style="color:#7d8590;line-height:2.4">:</span>
+          <input id="ab-minute" type="number" min="0" max="59" value="0"  style="width:60px"/>
+        </div>
+      </div>
+    </div>
+    <div class="modal-btns">
+      <button class="btn bg-gray" onclick="closeAutoBackup()">Cancel</button>
+      <button class="btn bg-green" onclick="submitAutoBackup()">Save Schedule</button>
     </div>
   </div>
 </div>
@@ -753,6 +866,7 @@ function cardHTML(s) {
       <button class="btn bg-teal"   onclick="openFB('${s.id}')">&#128193; Files</button>
       <button class="btn bg-yellow" onclick="doBackup('${s.id}',this)">&#128190; Backup</button>
       <button class="btn bg-gray"   onclick="openEdit('${s.id}')">&#9998; Edit</button>
+      <button class="btn ${s.autostart?'bg-green':'bg-gray'} btn-full" onclick="toggleAutostart('${s.id}',${s.autostart})">&#9654;&#9654; Autostart: ${s.autostart?'ON':'OFF'}</button>
       <button class="btn bg-danger btn-full" onclick="delServer('${s.id}')">Remove</button>
     </div>
     <div class="usage-bars">
@@ -814,7 +928,8 @@ function toggleBakSelAll(checked) {
 }
 
 function updateBakDel() {
-  document.getElementById('bak-del').disabled = bakSel.size === 0;
+  document.getElementById('bak-del').disabled     = bakSel.size === 0;
+  document.getElementById('bak-restore').disabled = bakSel.size !== 1;
 }
 
 async function delBackups() {
@@ -860,8 +975,9 @@ async function refresh() {
     _servers = d.servers || [];
     renderServers(_servers);
     renderBackups(d.backups || []);
-    if (d.backup_dir) document.getElementById('bak-dir').textContent = d.backup_dir;
-    if (d.sysinfo)    renderSysinfo(d.sysinfo);
+    if (d.backup_dir)  document.getElementById('bak-dir').textContent = d.backup_dir;
+    if (d.sysinfo)     renderSysinfo(d.sysinfo);
+    if (d.auto_backup) _autoBackupCfg = d.auto_backup;
     document.getElementById('upd').textContent = 'Updated ' + new Date().toLocaleTimeString();
     fetchAllLogs(d.servers || []);
     updateAllHeapGraphs(d.servers || []);
@@ -919,6 +1035,13 @@ async function fetchLogs(sid) {
 
 function fetchAllLogs(list) {
   for (const s of list) fetchLogs(s.id);
+}
+
+async function toggleAutostart(sid, current) {
+  const r = await api('POST', `/api/${sid}/config`, {autostart: !current});
+  if (r.ok) flash(`Autostart ${!current ? 'enabled' : 'disabled'} — takes effect on next CreeperCrest restart`);
+  else flash(r.error || r.msg, true);
+  refresh();
 }
 
 async function delServer(sid) {
@@ -1206,6 +1329,67 @@ async function delSelected() {
   loadDir(fb.path);
 }
 
+// ── Restore backup ─────────────────────────────────────────────────────────────
+
+function openRestore() {
+  if (bakSel.size !== 1) return;
+  const fname = [...bakSel][0];
+  document.getElementById('restore-fname').value = fname;
+  const select = document.getElementById('restore-sid');
+  select.innerHTML = _servers.map(s => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('');
+  if (!select.options.length) { flash('No servers configured', true); return; }
+  // Guess server from filename: strip trailing -YYYYMMDD-HHmmss.zip
+  const guessed = fname.replace(/-\\d{8}-\\d{6}\\.zip$/, '');
+  for (const opt of select.options) { if (opt.value === guessed) { opt.selected = true; break; } }
+  document.getElementById('restore-overlay').classList.add('open');
+}
+
+function closeRestore() { document.getElementById('restore-overlay').classList.remove('open'); }
+
+async function submitRestore() {
+  const fname = document.getElementById('restore-fname').value;
+  const sid   = document.getElementById('restore-sid').value;
+  const srv   = _servers.find(s => s.id === sid);
+  if (srv && srv.running) { flash('Stop the server before restoring', true); return; }
+  if (!confirm(`Restore "${fname}" onto "${srv ? srv.name : sid}"?\n\nThis OVERWRITES all server files and cannot be undone.`)) return;
+  closeRestore();
+  const r = await api('POST', '/api/restore', {backup: fname, sid});
+  if (r.ok) flash(`Restored ${fname}`);
+  else flash(r.msg || r.error, true);
+  refresh();
+}
+
+// ── Auto-backup schedule ───────────────────────────────────────────────────────
+
+let _autoBackupCfg = {enabled: false, day: 'sunday', hour: 3, minute: 0};
+
+function openAutoBackup() {
+  document.getElementById('ab-enabled').value = _autoBackupCfg.enabled ? '1' : '0';
+  document.getElementById('ab-day').value     = _autoBackupCfg.day    || 'sunday';
+  document.getElementById('ab-hour').value    = _autoBackupCfg.hour   ?? 3;
+  document.getElementById('ab-minute').value  = _autoBackupCfg.minute ?? 0;
+  document.getElementById('ab-overlay').classList.add('open');
+}
+
+function closeAutoBackup() { document.getElementById('ab-overlay').classList.remove('open'); }
+
+async function submitAutoBackup() {
+  const body = {
+    enabled: document.getElementById('ab-enabled').value === '1',
+    day:     document.getElementById('ab-day').value,
+    hour:    parseInt(document.getElementById('ab-hour').value)   || 0,
+    minute:  parseInt(document.getElementById('ab-minute').value) || 0,
+  };
+  const r = await api('POST', '/api/auto_backup', body);
+  if (r.ok) {
+    _autoBackupCfg = r.auto_backup;
+    flash(body.enabled
+      ? `Auto-backup scheduled — every ${body.day} at ${String(body.hour).padStart(2,'0')}:${String(body.minute).padStart(2,'0')}`
+      : 'Auto-backup disabled');
+    closeAutoBackup();
+  } else flash(r.error || 'Failed to save schedule', true);
+}
+
 // ── Boot ───────────────────────────────────────────────────────────────────────
 
 let _refreshTimer = null;
@@ -1278,10 +1462,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if parts == ["api", "status"]:
             return self.send_json({
-                "servers":    [s.status() for s in servers.values()],
-                "backups":    list_backups(),
-                "backup_dir": os.path.expanduser(cfg.get("backup_dir", "~/mc-backups")),
-                "sysinfo":    _get_sysinfo(),
+                "servers":     [s.status() for s in servers.values()],
+                "backups":     list_backups(),
+                "backup_dir":  os.path.expanduser(cfg.get("backup_dir", "~/mc-backups")),
+                "sysinfo":     _get_sysinfo(),
+                "auto_backup": cfg.get("auto_backup", {"enabled": False, "day": "sunday", "hour": 3, "minute": 0}),
             })
 
         if len(parts) == 3 and parts[0] == "api" and parts[2] == "logs":
@@ -1347,6 +1532,31 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         parts = self.segs()
 
+        # /api/restore
+        if parts == ["api", "restore"]:
+            b     = self.body()
+            fname = b.get("backup", "").strip()
+            sid   = b.get("sid",    "").strip()
+            if not fname or not sid:
+                return self.send_json({"error": "backup and sid required"}, 400)
+            ok, msg = restore_backup(fname, sid)
+            return self.send_json({"ok": ok, "msg": msg})
+
+        # /api/auto_backup  — save auto-backup schedule
+        if parts == ["api", "auto_backup"]:
+            b = self.body()
+            sched = {
+                "enabled": bool(b.get("enabled", False)),
+                "day":     b.get("day",    "sunday").lower(),
+                "hour":    max(0, min(23, int(b.get("hour",   3)))),
+                "minute":  max(0, min(59, int(b.get("minute", 0)))),
+            }
+            if sched["day"] not in _WEEKDAYS:
+                return self.send_json({"error": "invalid day"}, 400)
+            cfg["auto_backup"] = sched
+            save_cfg(cfg)
+            return self.send_json({"ok": True, "auto_backup": sched})
+
         # /api/add
         if parts == ["api", "add"]:
             b   = self.body()
@@ -1363,6 +1573,7 @@ class Handler(BaseHTTPRequestHandler):
                 "memory_min_mb": max(256, int(b.get("memory_min_mb", legacy))),
                 "memory_max_mb": max(256, int(b.get("memory_max_mb", legacy))),
                 "extra_args":    b.get("extra_args", "").strip(),
+                "autostart":     bool(b.get("autostart", False)),
             }
             if scfg["memory_min_mb"] > scfg["memory_max_mb"]:
                 return self.send_json({"error": "max RAM must be >= min RAM"}, 400)
@@ -1453,6 +1664,8 @@ class Handler(BaseHTTPRequestHandler):
                     srv.cfg["memory_max_mb"] = max(256, int(b["memory_max_mb"]))
                 if "extra_args" in b:
                     srv.cfg["extra_args"] = b["extra_args"]
+                if "autostart" in b:
+                    srv.cfg["autostart"] = bool(b["autostart"])
                 if srv.cfg.get("memory_min_mb", 256) > srv.cfg.get("memory_max_mb", 256):
                     return self.send_json({"error": "max RAM must be >= min RAM"}, 400)
                 cfg["servers"][sid] = srv.cfg
@@ -1538,7 +1751,15 @@ def main():
     _sig.signal(_sig.SIGTERM, shutdown)
     _sig.signal(_sig.SIGINT,  shutdown)
 
-    threading.Thread(target=_sysinfo_sampler, daemon=True, name='sysinfo').start()
+    threading.Thread(target=_sysinfo_sampler,        daemon=True, name='sysinfo').start()
+    threading.Thread(target=_autobackup_scheduler,   daemon=True, name='autobackup').start()
+
+    for sid, srv in list(servers.items()):
+        if srv.cfg.get("autostart", False):
+            print(f"  Auto-starting {sid}…")
+            ok, msg = srv.start()
+            if not ok:
+                print(f"    Failed: {msg}")
 
     httpd = ThreadingHTTPServer((host, port), Handler)
     print(f"CreeperCrest  →  http://{host}:{port}")
