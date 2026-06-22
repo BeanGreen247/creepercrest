@@ -409,6 +409,35 @@ def _parse_multipart(raw, boundary):
             files.append((fname, body))
     return files
 
+def _parse_multipart_full(raw, boundary):
+    """Return (fields_dict, files_list). Handles both form fields and file parts."""
+    sep    = b"--" + boundary
+    fields = {}
+    files  = []
+    for part in raw.split(sep)[1:]:
+        if part.startswith(b"--"):
+            break
+        if b"\r\n\r\n" not in part:
+            continue
+        headers_raw, body = part.split(b"\r\n\r\n", 1)
+        body = body.rstrip(b"\r\n")
+        cd   = ""
+        for line in headers_raw.split(b"\r\n"):
+            if line.lower().startswith(b"content-disposition"):
+                cd = line.decode(errors="replace")
+        name, fname = None, None
+        for token in cd.split(";"):
+            token = token.strip()
+            if token.lower().startswith("name="):
+                name = token[5:].strip().strip('"')
+            elif token.lower().startswith("filename="):
+                fname = token[9:].strip().strip('"')
+        if name and fname:
+            files.append((fname, body))
+        elif name:
+            fields[name] = body.decode(errors="replace")
+    return fields, files
+
 # ── HTML ───────────────────────────────────────────────────────────────────────
 
 HTML = """<!DOCTYPE html>
@@ -640,7 +669,10 @@ nav#main-nav{display:flex;gap:.2rem;margin-left:.6rem}
     <section>
       <div class="sec-hdr">
         <h2>Servers</h2>
-        <button class="btn bg-blue" onclick="openAdd()">+ Add Server</button>
+        <div style="display:flex;gap:.5rem">
+          <button class="btn bg-gray" onclick="openImport()">Import Server (ZIP)</button>
+          <button class="btn bg-blue" onclick="openAdd()">+ Add Server</button>
+        </div>
       </div>
       <div class="grid" id="grid"><div class="empty">No servers configured yet.</div></div>
     </section>
@@ -695,6 +727,44 @@ nav#main-nav{display:flex;gap:.2rem;margin-left:.6rem}
     <div class="modal-btns">
       <button class="btn bg-gray" onclick="closeAdd()">Cancel</button>
       <button class="btn bg-green" id="modal-submit-btn" onclick="submitModal()">Add Server</button>
+    </div>
+  </div>
+</div>
+
+<!-- Import server from ZIP overlay -->
+<div class="overlay" id="import-overlay">
+  <div class="modal">
+    <h3>Import Server from ZIP</h3>
+    <div class="frow">
+      <label>Server ZIP file</label>
+      <div class="upload-btn" style="width:100%">
+        <button class="btn bg-teal" style="width:100%;text-align:left" id="import-file-label">&#8679; Choose ZIP file…</button>
+        <input type="file" id="import-zip" accept=".zip" onchange="importFileChosen(this)"/>
+      </div>
+    </div>
+    <div class="frow-2">
+      <div class="frow"><label>ID (letters, numbers, dash)</label><input id="fi-id" placeholder="survival"/></div>
+      <div class="frow"><label>Display Name</label><input id="fi-name" placeholder="Survival SMP"/></div>
+    </div>
+    <div class="frow"><label>Extract to Directory (full path)</label><input id="fi-dir" placeholder="/home/crafty/servers/survival"/></div>
+    <div class="frow"><label>JAR filename</label><input id="fi-jar" value="server.jar"/></div>
+    <div class="frow-2">
+      <div class="frow"><label>Min RAM (MB)</label><input id="fi-min" type="number" value="512" min="256" step="256"/></div>
+      <div class="frow"><label>Max RAM (MB)</label><input id="fi-max" type="number" value="2048" min="256" step="256"/></div>
+    </div>
+    <div class="frow"><label>Extra JVM args</label><input id="fi-args" value="-XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:MaxGCPauseMillis=200"/></div>
+    <div id="import-prog" style="display:none;margin-bottom:.7rem">
+      <div style="display:flex;align-items:center;gap:.7rem">
+        <span id="import-prog-label" style="font-size:.78rem;color:#c9d1d9;white-space:nowrap;min-width:130px">Uploading…</span>
+        <div style="flex:1;height:6px;background:#21262d;border-radius:3px;overflow:hidden">
+          <div id="import-prog-fill" style="height:100%;border-radius:3px;background:#1f6feb;width:0%;transition:width .15s"></div>
+        </div>
+        <span id="import-prog-val" style="font-size:.74rem;color:#7d8590;white-space:nowrap;min-width:90px;text-align:right"></span>
+      </div>
+    </div>
+    <div class="modal-btns">
+      <button class="btn bg-gray" onclick="closeImport()">Cancel</button>
+      <button class="btn bg-green" onclick="submitImport()" id="import-submit-btn">Import Server</button>
     </div>
   </div>
 </div>
@@ -1195,6 +1265,93 @@ async function submitEdit() {
   refresh();
 }
 
+// ── Import server from ZIP ─────────────────────────────────────────────────────
+
+function openImport() {
+  document.getElementById('fi-id').value   = '';
+  document.getElementById('fi-name').value = '';
+  document.getElementById('fi-dir').value  = '';
+  document.getElementById('fi-jar').value  = 'server.jar';
+  document.getElementById('fi-min').value  = '512';
+  document.getElementById('fi-max').value  = '2048';
+  document.getElementById('fi-args').value = '-XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:MaxGCPauseMillis=200';
+  document.getElementById('import-file-label').textContent = '\\u2B06 Choose ZIP file\\u2026';
+  document.getElementById('import-zip').value = '';
+  document.getElementById('import-prog').style.display = 'none';
+  document.getElementById('import-submit-btn').disabled = false;
+  document.getElementById('import-overlay').classList.add('open');
+}
+
+function closeImport() { document.getElementById('import-overlay').classList.remove('open'); }
+
+function importFileChosen(input) {
+  document.getElementById('import-file-label').textContent =
+    input.files.length ? '\\u2B06 ' + input.files[0].name : '\\u2B06 Choose ZIP file\\u2026';
+}
+
+async function submitImport() {
+  const g = id => document.getElementById(id).value.trim();
+  const zipInput = document.getElementById('import-zip');
+  if (!zipInput.files.length) { flash('Choose a ZIP file first', true); return; }
+  const sid = g('fi-id');
+  if (!sid) { flash('ID is required', true); return; }
+  if (!/^[a-z0-9][a-z0-9\\-]*$/.test(sid)) { flash('ID: use only lowercase letters, numbers, dashes', true); return; }
+  const dir = g('fi-dir');
+  if (!dir) { flash('Directory is required', true); return; }
+  const min = parseInt(g('fi-min')) || 512;
+  const max = parseInt(g('fi-max')) || 2048;
+  if (min > max) { flash('Max RAM must be \\u2265 Min RAM', true); return; }
+
+  const form = new FormData();
+  form.append('file', zipInput.files[0], zipInput.files[0].name);
+  form.append('id',            sid);
+  form.append('name',          g('fi-name') || sid);
+  form.append('directory',     dir);
+  form.append('jar',           g('fi-jar') || 'server.jar');
+  form.append('memory_min_mb', min);
+  form.append('memory_max_mb', max);
+  form.append('extra_args',    g('fi-args'));
+
+  const prog = document.getElementById('import-prog');
+  const fill = document.getElementById('import-prog-fill');
+  const val  = document.getElementById('import-prog-val');
+  const lbl  = document.getElementById('import-prog-label');
+  const btn  = document.getElementById('import-submit-btn');
+  prog.style.display = 'block';
+  btn.disabled = true;
+  lbl.textContent = 'Uploading\\u2026';
+
+  try {
+    const d = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.upload.onprogress = e => {
+        if (!e.lengthComputable) return;
+        const mb = v => (v / 1048576).toFixed(1);
+        fill.style.width = Math.min(e.loaded / e.total * 95, 95) + '%';
+        val.textContent = mb(e.loaded) + ' / ' + mb(e.total) + ' MB';
+      };
+      xhr.onload  = () => { try { resolve(JSON.parse(xhr.responseText)); } catch { reject(); } };
+      xhr.onerror = () => reject();
+      xhr.open('POST', '/api/import');
+      xhr.send(form);
+    });
+    lbl.textContent = 'Extracting\\u2026';
+    fill.style.width = '100%';
+    setTimeout(() => { prog.style.display = 'none'; btn.disabled = false; }, 400);
+    if (d.ok) {
+      closeImport();
+      flash('Server imported successfully');
+      refresh();
+    } else {
+      flash(d.error || 'Import failed', true);
+    }
+  } catch {
+    prog.style.display = 'none';
+    btn.disabled = false;
+    flash('Import failed', true);
+  }
+}
+
 // ── File browser ───────────────────────────────────────────────────────────────
 
 function openFB(sid) {
@@ -1627,6 +1784,55 @@ class Handler(BaseHTTPRequestHandler):
             cfg["auto_backup"] = sched
             save_cfg(cfg)
             return self.send_json({"ok": True, "auto_backup": sched})
+
+        # /api/import  — upload a zip, extract it, register a new server
+        if parts == ["api", "import"]:
+            ct = self.headers.get("Content-Type", "")
+            cl = int(self.headers.get("Content-Length", 0))
+            if "boundary=" not in ct:
+                return self.send_json({"error": "expected multipart/form-data"}, 400)
+            boundary = ct.split("boundary=")[1].strip().encode()
+            raw      = self.rfile.read(cl)
+            fields, files = _parse_multipart_full(raw, boundary)
+
+            sid = fields.get("id", "").strip().lower().replace(" ", "-")
+            if not sid:
+                return self.send_json({"error": "id required"}, 400)
+            if sid in servers:
+                return self.send_json({"error": f'id "{sid}" already exists'}, 400)
+
+            directory = fields.get("directory", "").strip()
+            if not directory:
+                return self.send_json({"error": "directory required"}, 400)
+
+            zip_data = next((data for fname, data in files if fname.lower().endswith(".zip")), None)
+            if not zip_data:
+                return self.send_json({"error": "no zip file uploaded"}, 400)
+
+            dest = os.path.expanduser(directory)
+            os.makedirs(dest, exist_ok=True)
+            try:
+                with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+                    zf.extractall(dest)
+            except Exception as e:
+                return self.send_json({"error": f"failed to extract zip: {e}"}, 400)
+
+            legacy = max(256, int(fields.get("memory_mb", "1024") or 1024))
+            scfg = {
+                "name":          (fields.get("name", sid).strip() or sid),
+                "directory":     directory,
+                "jar":           (fields.get("jar", "server.jar").strip() or "server.jar"),
+                "memory_min_mb": max(256, int(fields.get("memory_min_mb", legacy) or legacy)),
+                "memory_max_mb": max(256, int(fields.get("memory_max_mb", legacy) or legacy)),
+                "extra_args":    fields.get("extra_args", "").strip(),
+                "autostart":     False,
+            }
+            if scfg["memory_min_mb"] > scfg["memory_max_mb"]:
+                return self.send_json({"error": "max RAM must be >= min RAM"}, 400)
+            cfg["servers"][sid] = scfg
+            save_cfg(cfg)
+            servers[sid] = ManagedServer(sid, scfg)
+            return self.send_json({"ok": True, "id": sid})
 
         # /api/add
         if parts == ["api", "add"]:
