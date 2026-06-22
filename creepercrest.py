@@ -1178,10 +1178,13 @@ async function toggleAutostart(sid, current) {
 }
 
 async function delServer(sid) {
-  if (!confirm(`Remove "${sid}" from CreeperCrest?\nServer files will NOT be deleted.`)) return;
+  const s = _servers.find(x => x.id === sid);
+  const name = s ? s.name : sid;
+  const dir  = s ? s.directory : '';
+  if (!confirm(`Remove "${name}" and permanently delete its server directory?\n\n${dir}\n\nThis cannot be undone.`)) return;
   const r = await api('DELETE', `/api/${sid}`);
   if (!r.ok) { flash(r.error, true); return; }
-  flash(`Removed ${sid}`);
+  flash(`Removed ${name} and deleted server directory`);
   refresh();
 }
 
@@ -1973,16 +1976,23 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self.send_json({"error": str(e)}, 500)
 
-        # /api/{id}  — remove server
+        # /api/{id}  — remove server and delete its directory
         if len(parts) == 2 and parts[0] == "api":
             sid = parts[1]
             if sid not in servers:
                 return self.send_json({"error": "not found"}, 404)
             if servers[sid].is_running():
                 return self.send_json({"error": "stop the server before removing it"}, 400)
+            directory = os.path.expanduser(servers[sid].cfg.get("directory", ""))
             del servers[sid]
             del cfg["servers"][sid]
             save_cfg(cfg)
+            if directory and os.path.isdir(directory):
+                import shutil
+                try:
+                    shutil.rmtree(directory)
+                except Exception as e:
+                    return self.send_json({"ok": True, "warn": f"Removed from config but could not delete directory: {e}"})
             return self.send_json({"ok": True})
 
         # /api/{id}/file?path=  — delete file or directory
