@@ -572,6 +572,25 @@ section+section{margin-top:2rem}
 .hl-full{display:inline-block;width:12px;height:2px;background:#f85149;border-radius:1px}
 .usage-val{font-size:.72rem;color:#7d8590;white-space:nowrap;min-width:90px;text-align:right}
 
+/* ── Nav tabs ── */
+nav#main-nav{display:flex;gap:.2rem;margin-left:.6rem}
+.nav-link{padding:.3rem .85rem;font-size:.83rem;color:#7d8590;border-radius:5px;
+  cursor:pointer;border:1px solid transparent;background:transparent;font-family:inherit;white-space:nowrap}
+.nav-link:hover{color:#c9d1d9;border-color:#30363d}
+.nav-link.active{color:#58a6ff;background:#1f2d45;border-color:#1f6feb}
+.page{display:none}
+.page.active{display:block}
+
+/* ── Schedule info banner ── */
+.sched-banner{display:flex;align-items:center;gap:.8rem;padding:.75rem 1rem;
+  border-radius:6px;margin-bottom:.5rem;font-size:.83rem;flex-wrap:wrap}
+.sched-banner.on{background:#1a3a28;border:1px solid #238636}
+.sched-banner.off{background:#21262d;border:1px solid #30363d}
+.sched-banner-icon{font-size:1.1rem;flex-shrink:0}
+.sched-banner-text{flex:1;color:#c9d1d9;line-height:1.5}
+.sched-banner-text b{color:#f0f6fc}
+.sched-banner-text span{color:#7d8590;font-size:.78rem}
+
 /* ── Flash ── */
 .flash{position:fixed;bottom:1.5rem;right:1.5rem;background:#1f3a6e;color:#79c0ff;
   border:1px solid #1f6feb;border-radius:6px;padding:.6rem 1rem;font-size:.85rem;
@@ -582,7 +601,11 @@ section+section{margin-top:2rem}
 </head>
 <body>
 <header>
-  <h1><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160.07292 160.07292" width="22" height="22" aria-hidden="true" style="vertical-align:-.25rem"><rect fill="#3eae30" width="160.07292" height="160.07292"/><g transform="translate(36.947174,215.35194)"><path fill="#000" d="M 14.646575,-93.549115 H 28.820683 V -107.72322 H 57.73586 v 13.985119 H 72.287943 V -136.73289 H 58.019342 v -42.99479 H 86.840026 V -150.907 H 0.0944922 v -28.82068 H 29.009669 v 43.08928 H 14.646575 Z"/></g></svg> CreeperCrest</h1>
+  <h1><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160.07292 160.07292" width="22" height="22" aria-hidden="true" style="vertical-align:-.25rem"><rect fill="#3eae30" width="160.07292" height="160.07292"/><g transform="translate(36.947174,215.35194)"><path fill="#000" d="M 14.646575,-93.549115 H 28.820683 V -107.72322 H 57.73586 v 13.985119 H 72.287943 V -136.73289 H 58.019342 v -42.99479 H 86.840026 V -150.907 H 0.0944922 v -28.82068 H 29.009669 v 43.08928 H 14.646575 Z"/></g></svg> Creeper Crest</h1>
+  <nav id="main-nav">
+    <button class="nav-link active" onclick="showPage('servers',this)">Servers</button>
+    <button class="nav-link" onclick="showPage('backups',this)">Backups</button>
+  </nav>
   <a href="https://github.com/BeanGreen247/creepercrest" target="_blank" rel="noopener" style="font-size:.73rem;color:#7d8590;white-space:nowrap">by BeanGreen247</a>
   <div class="refresh-ctrl">
     <label for="refresh-secs">Refresh every</label>
@@ -592,48 +615,61 @@ section+section{margin-top:2rem}
   <span id="upd">connecting…</span>
 </header>
 <main>
-  <section>
-    <div class="sec-hdr"><h2>System</h2></div>
-    <div class="sys-card">
-      <div class="sys-col">
-        <span class="sys-col-label">CPU</span>
-        <div id="sys-cpu-bar"><div class="usage-bar"><div class="usage-fill cpu-fill" style="width:0%"></div></div></div>
-        <span class="sys-col-val" id="sys-cpu-val">—</span>
+  <!-- Servers page -->
+  <div id="page-servers" class="page active">
+    <section>
+      <div class="sec-hdr"><h2>System</h2></div>
+      <div class="sys-card">
+        <div class="sys-col">
+          <span class="sys-col-label">CPU</span>
+          <div id="sys-cpu-bar"><div class="usage-bar"><div class="usage-fill cpu-fill" style="width:0%"></div></div></div>
+          <span class="sys-col-val" id="sys-cpu-val">—</span>
+        </div>
+        <div class="sys-col">
+          <span class="sys-col-label">RAM</span>
+          <div id="sys-ram-bar"><div class="usage-bar"><div class="usage-fill ram-fill" style="width:0%"></div></div></div>
+          <span class="sys-col-val" id="sys-ram-val">—</span>
+        </div>
+        <div class="sys-col">
+          <span class="sys-col-label">Disk /</span>
+          <div id="sys-disk-bar"><div class="usage-bar"><div class="usage-fill heap-fill" style="width:0%"></div></div></div>
+          <span class="sys-col-val" id="sys-disk-val">—</span>
+        </div>
       </div>
-      <div class="sys-col">
-        <span class="sys-col-label">RAM</span>
-        <div id="sys-ram-bar"><div class="usage-bar"><div class="usage-fill ram-fill" style="width:0%"></div></div></div>
-        <span class="sys-col-val" id="sys-ram-val">—</span>
+    </section>
+    <section>
+      <div class="sec-hdr">
+        <h2>Servers</h2>
+        <button class="btn bg-blue" onclick="openAdd()">+ Add Server</button>
       </div>
-      <div class="sys-col">
-        <span class="sys-col-label">Disk /</span>
-        <div id="sys-disk-bar"><div class="usage-bar"><div class="usage-fill heap-fill" style="width:0%"></div></div></div>
-        <span class="sys-col-val" id="sys-disk-val">—</span>
+      <div class="grid" id="grid"><div class="empty">No servers configured yet.</div></div>
+    </section>
+  </div>
+
+  <!-- Backups page -->
+  <div id="page-backups" class="page">
+    <section>
+      <div class="sec-hdr">
+        <h2>Backup Schedule</h2>
+        <button class="btn bg-gray" onclick="openAutoBackup()" style="font-size:.78rem;padding:.3rem .65rem">&#9998; Edit Schedule</button>
       </div>
-    </div>
-  </section>
-  <section>
-    <div class="sec-hdr">
-      <h2>Servers</h2>
-      <button class="btn bg-blue" onclick="openAdd()">+ Add Server</button>
-    </div>
-    <div class="grid" id="grid"><div class="empty">No servers configured yet.</div></div>
-  </section>
-  <section>
-    <div class="sec-hdr">
-      <h2>Backups</h2>
-      <div style="display:flex;align-items:center;gap:.7rem">
-        <small style="color:#7d8590;font-size:.78rem">Saved to <code id="bak-dir">~/mc-backups</code></small>
-        <label style="font-size:.78rem;color:#7d8590;cursor:pointer;display:flex;align-items:center;gap:.3rem">
-          <input type="checkbox" id="bak-selall" onchange="toggleBakSelAll(this.checked)" style="accent-color:#58a6ff"> All
-        </label>
-        <button class="btn bg-yellow" id="bak-restore" onclick="openRestore()" disabled style="font-size:.78rem;padding:.3rem .65rem">&#9100; Restore</button>
-        <button class="btn bg-danger"  id="bak-del"     onclick="delBackups()"  disabled style="font-size:.78rem;padding:.3rem .65rem">&#128465; Delete Selected</button>
-        <button class="btn bg-gray"   onclick="openAutoBackup()" style="font-size:.78rem;padding:.3rem .65rem">Schedule</button>
+      <div id="sched-display"></div>
+    </section>
+    <section>
+      <div class="sec-hdr">
+        <h2>Backup Files</h2>
+        <div style="display:flex;align-items:center;gap:.7rem;flex-wrap:wrap">
+          <small style="color:#7d8590;font-size:.78rem">Saved to <code id="bak-dir">~/mc-backups</code></small>
+          <label style="font-size:.78rem;color:#7d8590;cursor:pointer;display:flex;align-items:center;gap:.3rem">
+            <input type="checkbox" id="bak-selall" onchange="toggleBakSelAll(this.checked)" style="accent-color:#58a6ff"> All
+          </label>
+          <button class="btn bg-yellow" id="bak-restore" onclick="openRestore()" disabled style="font-size:.78rem;padding:.3rem .65rem">&#9100; Restore</button>
+          <button class="btn bg-danger" id="bak-del"     onclick="delBackups()"  disabled style="font-size:.78rem;padding:.3rem .65rem">&#128465; Delete Selected</button>
+        </div>
       </div>
-    </div>
-    <div id="blist"><div class="empty">No backups yet.</div></div>
-  </section>
+      <div id="blist"><div class="empty">No backups yet.</div></div>
+    </section>
+  </div>
 </main>
 <footer style="text-align:center;padding:1.2rem 2rem;border-top:1px solid #30363d;margin-top:2rem;font-size:.75rem;color:#484f58">
   <a href="https://github.com/BeanGreen247/creepercrest" target="_blank" rel="noopener" style="color:#7d8590">CreeperCrest</a>
@@ -811,6 +847,33 @@ function updateAllHeapGraphs(list) {
   for (const s of list) updateHeapGraph(s);
 }
 
+// ── Page navigation ────────────────────────────────────────────────────────────
+
+function showPage(name, btn) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-link').forEach(a => a.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  if (btn) btn.classList.add('active');
+  localStorage.setItem('cc-page', name);
+}
+
+function renderScheduleDisplay(ab) {
+  const el = document.getElementById('sched-display');
+  if (!el) return;
+  if (!ab) { el.innerHTML = ''; return; }
+  const en = ab.enabled;
+  const timeStr = en
+    ? `Every <b>${ab.day.charAt(0).toUpperCase()+ab.day.slice(1)}</b> at <b>${String(ab.hour).padStart(2,'0')}:${String(ab.minute).padStart(2,'0')}</b>`
+    : '';
+  el.innerHTML = `<div class="sched-banner ${en?'on':'off'}">
+  <span class="sched-banner-icon">${en?'&#9989;':'&#8987;'}</span>
+  <span class="sched-banner-text">${en
+    ? `Auto-backup is <b>active</b> — ${timeStr}, backs up all servers.`
+    : 'Auto-backup is <b>disabled</b>. <span>Click "Edit Schedule" to configure a recurring backup.</span>'
+  }</span>
+</div>`;
+}
+
 // ── Utilities ──────────────────────────────────────────────────────────────────
 
 function esc(s) {
@@ -977,7 +1040,7 @@ async function refresh() {
     renderBackups(d.backups || []);
     if (d.backup_dir)  document.getElementById('bak-dir').textContent = d.backup_dir;
     if (d.sysinfo)     renderSysinfo(d.sysinfo);
-    if (d.auto_backup) _autoBackupCfg = d.auto_backup;
+    if (d.auto_backup) { _autoBackupCfg = d.auto_backup; renderScheduleDisplay(d.auto_backup); }
     document.getElementById('upd').textContent = 'Updated ' + new Date().toLocaleTimeString();
     fetchAllLogs(d.servers || []);
     updateAllHeapGraphs(d.servers || []);
@@ -1383,6 +1446,7 @@ async function submitAutoBackup() {
   const r = await api('POST', '/api/auto_backup', body);
   if (r.ok) {
     _autoBackupCfg = r.auto_backup;
+    renderScheduleDisplay(r.auto_backup);
     flash(body.enabled
       ? `Auto-backup scheduled — every ${body.day} at ${String(body.hour).padStart(2,'0')}:${String(body.minute).padStart(2,'0')}`
       : 'Auto-backup disabled');
@@ -1403,6 +1467,13 @@ function startRefresh() {
 }
 
 document.getElementById('refresh-secs').addEventListener('change', startRefresh);
+
+// Restore last active page
+(function () {
+  const page = localStorage.getItem('cc-page') || 'servers';
+  const btn  = document.querySelector(`#main-nav .nav-link:${page === 'backups' ? 'last-child' : 'first-child'}`);
+  showPage(page, btn);
+})();
 
 refresh();
 startRefresh();
