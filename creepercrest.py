@@ -832,6 +832,7 @@ nav#main-nav{display:flex;gap:.2rem;margin-left:.6rem}
         <button class="btn bg-teal">&#8679; Upload</button>
         <input type="file" id="fb-upload" multiple onchange="doUpload()"/>
       </div>
+      <button class="btn bg-gray" onclick="newFolder()">&#128193; New Folder</button>
       <button class="btn bg-blue"   onclick="dlSelected()">&#8681; Download</button>
       <button class="btn bg-yellow" onclick="dlZip()">&#128230; Download ZIP</button>
       <button class="btn bg-danger" onclick="delSelected()" id="fb-del">&#128465; Delete</button>
@@ -1507,6 +1508,14 @@ async function dlZip() {
   } catch { fbProgHide(); flash('ZIP failed', true); }
 }
 
+async function newFolder() {
+  const name = (prompt('New folder name:') || '').trim();
+  if (!name) return;
+  const r = await api('POST', `/api/${fb.sid}/mkdir?path=${encodeURIComponent(fb.path)}`, {name});
+  if (r.ok) { flash('Created "' + r.name + '"'); loadDir(fb.path); }
+  else flash(r.error || 'Create failed', true);
+}
+
 async function doUpload() {
   const input = document.getElementById('fb-upload');
   if (!input.files.length) return;
@@ -1892,6 +1901,28 @@ class Handler(BaseHTTPRequestHandler):
                         f.write(data)
                     saved += 1
                 return self.send_json({"ok": True, "count": saved})
+
+            # /api/{id}/mkdir?path=  — create a folder
+            if action == "mkdir":
+                b    = self.body()
+                name = os.path.basename(b.get("name", "").strip().strip("/\\"))
+                if not name or name in (".", ".."):
+                    return self.send_json({"error": "invalid folder name"}, 400)
+                rel    = unquote(self.qs().get("path", [""])[0])
+                base   = os.path.expanduser(srv.cfg.get("directory", ""))
+                parent = _safe_path(base, rel)
+                if not parent or not os.path.isdir(parent):
+                    return self.send_json({"error": "invalid path"}, 400)
+                target = _safe_path(base, os.path.join(rel, name))
+                if not target:
+                    return self.send_json({"error": "invalid path"}, 400)
+                if os.path.exists(target):
+                    return self.send_json({"error": "already exists"}, 400)
+                try:
+                    os.mkdir(target)
+                except Exception as e:
+                    return self.send_json({"error": str(e)}, 500)
+                return self.send_json({"ok": True, "name": name})
 
             # /api/{id}/zip  — download selected files as zip
             if action == "zip":
