@@ -121,3 +121,11 @@ If running as a service: `sudo systemctl stop creepercrest`
 ## Permissions Note
 
 CreeperCrest must run as the same user that owns the server files. If your servers were previously managed by Crafty Controller they are likely owned by the `crafty` user — run CreeperCrest as `crafty` (see systemd service above).
+
+## Support
+
+If this project is useful to you, consider supporting its development via PayPal:
+
+[![Donate with PayPal](.github/paypal-qr.png)](https://paypal.me/beangreen2471)
+
+**PayPal:** https://paypal.me/beangreen2471
