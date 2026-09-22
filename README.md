@@ -1,13 +1,13 @@
 # CreeperCrest
 
-Lightweight Minecraft server management panel. No external dependencies — pure Python stdlib only.
+Lightweight Minecraft server management panel. No external dependencies - pure Python stdlib only.
 
 ## Features
 
 - Start, stop, and restart servers
 - Live console output per server with command input
 - Memory (RAM) allocation per server
-- One-click backups — zipped and saved to `~/mc-backups`
+- One-click backups - zipped and saved to `~/mc-backups`
 - Direct backup download from the browser
 - Add and remove servers via the web UI
 - Auto-refreshes every 5 seconds
@@ -72,7 +72,7 @@ Then open `http://<your-server-ip>:8888` in a browser.
 | `port` | Web UI port |
 | `backup_dir` | Where zip backups are saved. `~` resolves to the running user's home |
 | `refresh_interval` | How often the UI polls for status updates, in seconds (default: `5`) |
-| `servers` | Managed automatically by the UI — do not edit by hand |
+| `servers` | Managed automatically by the UI - do not edit by hand |
 
 ## Adding a Server
 
@@ -88,7 +88,7 @@ Then open `http://<your-server-ip>:8888` in a browser.
 | JAR filename | Usually `server.jar` or `paper.jar` |
 | Min RAM (MB) | Minimum RAM allocated with `-Xms` |
 | Max RAM (MB) | Maximum RAM allocated with `-Xmx` |
-| Extra JVM args | G1GC flags etc. — safe to leave as default |
+| Extra JVM args | G1GC flags etc. - safe to leave as default |
 
 ## Backups
 
@@ -103,7 +103,7 @@ Clicking **Backup** on a server card:
 
 ```
 creepercrest/
-├── creepercrest.py      # everything — web server, process manager, backup logic
+├── creepercrest.py      # everything - web server, process manager, backup logic
 ├── creepercrest.service # systemd service template (User=crafty)
 ├── deploy.sh            # interactive install script
 ├── config.json          # auto-managed, edit only host/port/backup_dir
@@ -114,13 +114,13 @@ Backups are stored outside this directory at `~/mc-backups/` (configurable).
 
 ## Stopping CreeperCrest
 
-If running manually: `Ctrl+C` — all running Minecraft servers are sent the `stop` command before exit.
+If running manually: `Ctrl+C` - all running Minecraft servers are sent the `stop` command before exit.
 
 If running as a service: `sudo systemctl stop creepercrest`
 
 ## Permissions Note
 
-CreeperCrest must run as the same user that owns the server files. If your servers were previously managed by Crafty Controller they are likely owned by the `crafty` user — run CreeperCrest as `crafty` (see systemd service above).
+CreeperCrest must run as the same user that owns the server files. If your servers were previously managed by Crafty Controller they are likely owned by the `crafty` user - run CreeperCrest as `crafty` (see systemd service above).
 
 ## Support
 

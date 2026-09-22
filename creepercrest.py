@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""CreeperCrest — lightweight Minecraft server manager. Zero external dependencies.
-By BeanGreen247 — https://github.com/BeanGreen247/creepercrest
+"""CreeperCrest - lightweight Minecraft server manager. Zero external dependencies.
+By BeanGreen247 - https://github.com/BeanGreen247/creepercrest
 """
 
 import os
@@ -59,7 +59,7 @@ def _sysinfo_sampler():
             with open('/proc/stat') as f:
                 raw = f.readline().split()[1:]      # all fields: user nice sys idle iowait irq softirq steal …
             vals  = list(map(int, raw))
-            # guest/guest_nice are already counted inside user/nice — exclude to avoid double-counting
+            # guest/guest_nice are already counted inside user/nice - exclude to avoid double-counting
             idle  = vals[3] + vals[4]               # idle + iowait
             total = sum(vals[:8])                   # user nice sys idle iowait irq softirq steal
             sys_total = total
@@ -138,7 +138,7 @@ class ManagedServer:
                 return False, "Already running"
             directory = os.path.expanduser(self.cfg.get("directory", ""))
             jar       = self.cfg.get("jar", "server.jar")
-            # min/max RAM — fall back to legacy memory_mb if new keys absent
+            # min/max RAM - fall back to legacy memory_mb if new keys absent
             legacy    = self.cfg.get("memory_mb", 1024)
             min_mem   = int(self.cfg.get("memory_min_mb", legacy))
             max_mem   = int(self.cfg.get("memory_max_mb", legacy))
@@ -158,7 +158,7 @@ class ManagedServer:
                     text=True, bufsize=1,
                 )
             except FileNotFoundError:
-                return False, "java not found — is a JRE installed?"
+                return False, "java not found - is a JRE installed?"
             except Exception as e:
                 return False, str(e)
             self._append(f"[CreeperCrest] Started PID {self.process.pid}  |  {' '.join(cmd)}")
@@ -448,30 +448,49 @@ HTML = """<!DOCTYPE html>
 <title>CreeperCrest</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
+html{scrollbar-color:#30363d transparent}
+body{background:
+    radial-gradient(1100px 520px at 12% -8%, rgba(31,111,235,.10), transparent 60%),
+    radial-gradient(900px 480px at 100% 0%, rgba(63,185,80,.06), transparent 55%),
+    #0a0d12;
+  color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh;letter-spacing:.1px}
 a{color:#58a6ff;text-decoration:none}
 
-header{background:#161b22;border-bottom:1px solid #30363d;padding:.9rem 2rem;display:flex;align-items:center;gap:1rem}
-header h1{font-size:1.3rem;color:#f0f6fc;font-weight:700}
+header{background:rgba(22,27,34,.85);backdrop-filter:blur(10px);position:sticky;top:0;z-index:50;
+  border-bottom:1px solid #21262d;padding:.85rem 2rem;display:flex;align-items:center;gap:1.1rem;
+  box-shadow:0 1px 0 rgba(0,0,0,.4)}
+header h1{font-size:1.22rem;color:#f0f6fc;font-weight:700;display:flex;align-items:center;gap:.55rem}
+header h1 svg{filter:drop-shadow(0 0 8px rgba(62,174,48,.45))}
 .refresh-ctrl{display:flex;align-items:center;gap:.4rem;font-size:.78rem;color:#7d8590;margin-left:auto}
-.refresh-ctrl input{width:52px;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;
-  padding:.25rem .4rem;border-radius:4px;font-size:.78rem;text-align:center;outline:none}
-.refresh-ctrl input:focus{border-color:#58a6ff}
-#upd{color:#7d8590;font-size:.8rem}
+.refresh-ctrl input{width:52px;background:#0a0d12;border:1px solid #30363d;color:#c9d1d9;
+  padding:.25rem .4rem;border-radius:6px;font-size:.78rem;text-align:center;outline:none;transition:border-color .15s}
+.refresh-ctrl input:focus{border-color:#58a6ff;box-shadow:0 0 0 3px rgba(88,166,255,.15)}
+#upd{color:#7d8590;font-size:.8rem;padding:.25rem .6rem;background:#161b22;border:1px solid #21262d;border-radius:20px}
 
-main{padding:1.5rem 2rem;max-width:1300px;margin:0 auto}
-section+section{margin-top:2rem}
-.sec-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:.9rem}
-.sec-hdr h2{font-size:1rem;font-weight:600;color:#f0f6fc}
+main{padding:1.8rem 2rem 3rem;max-width:1300px;margin:0 auto}
+section+section{margin-top:2.2rem}
+.sec-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem}
+.sec-hdr h2{font-size:1.02rem;font-weight:700;color:#f0f6fc;display:flex;align-items:center;gap:.6rem}
+.sec-hdr h2::before{content:'';display:block;width:4px;height:16px;border-radius:3px;
+  background:linear-gradient(180deg,#58a6ff,#3fb950)}
 
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(460px,1fr));gap:1rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(460px,1fr));gap:1.1rem}
 
-.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:1.2rem}
+.card{background:linear-gradient(180deg,#161b22 0%,#141920 100%);border:1px solid #21262d;
+  border-left:3px solid #30363d;border-radius:12px;padding:1.25rem;
+  box-shadow:0 2px 10px rgba(0,0,0,.35);transition:border-color .2s,box-shadow .2s,transform .2s}
+.card:has(.badge.on){border-left-color:#238636}
+.card:has(.badge.off){border-left-color:#8b1a1a}
+.card:hover{box-shadow:0 6px 22px rgba(0,0,0,.45);transform:translateY(-1px)}
 .card-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:.9rem}
-.card-name{font-size:1rem;font-weight:600;color:#f0f6fc}
-.badge{font-size:.72rem;font-weight:700;padding:.2rem .55rem;border-radius:20px}
-.badge.on{background:#1a3a28;color:#3fb950;border:1px solid #238636}
-.badge.off{background:#3d1616;color:#f85149;border:1px solid #8b1a1a}
+.card-name{font-size:1.02rem;font-weight:700;color:#f0f6fc;letter-spacing:.1px}
+.badge{font-size:.7rem;font-weight:700;padding:.24rem .6rem .24rem .5rem;border-radius:20px;
+  display:inline-flex;align-items:center;gap:.4rem;text-transform:uppercase;letter-spacing:.04em}
+.badge::before{content:'';width:6px;height:6px;border-radius:50%}
+.badge.on{background:rgba(35,134,54,.15);color:#3fb950;border:1px solid rgba(35,134,54,.4)}
+.badge.on::before{background:#3fb950;box-shadow:0 0 6px #3fb950}
+.badge.off{background:rgba(139,26,26,.15);color:#f85149;border:1px solid rgba(139,26,26,.4)}
+.badge.off::before{background:#f85149}
 
 .info{font-size:.78rem;color:#7d8590;margin-bottom:.85rem;line-height:1.7}
 .info b{color:#c9d1d9}
@@ -487,13 +506,15 @@ section+section{margin-top:2rem}
 .btn-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.45rem;margin:0 auto .6rem;width:min(100%,380px)}
 .btn-grid .btn{padding:.6rem .5rem;font-size:.85rem;font-weight:600;width:100%}
 .btn-grid .btn-full{grid-column:1/-1}
-.btn{border:none;border-radius:5px;padding:.38rem .8rem;font-size:.8rem;font-weight:500;
-  cursor:pointer;transition:opacity .12s}
-.btn:hover{opacity:.8}
-.btn:disabled{opacity:.35;cursor:not-allowed}
-.bg-green{background:#238636;color:#fff}
+.btn{border:none;border-radius:8px;padding:.42rem .85rem;font-size:.8rem;font-weight:600;
+  cursor:pointer;transition:filter .12s,transform .1s,box-shadow .15s;letter-spacing:.1px}
+.btn:hover{filter:brightness(1.18)}
+.btn:active{transform:scale(.96)}
+.btn:disabled{opacity:.35;cursor:not-allowed;filter:none;transform:none;box-shadow:none}
+.bg-green{background:linear-gradient(180deg,#2ea043,#238636);color:#fff;box-shadow:0 2px 8px rgba(35,134,54,.35)}
 .bg-red{background:#8b1a1a;color:#f85149;border:1px solid #8b1a1a}
-.bg-blue{background:#1f3a6e;color:#79c0ff;border:1px solid #1f6feb}
+.bg-blue{background:linear-gradient(180deg,#2361c9,#1f3a6e);color:#eaf3ff;border:1px solid #1f6feb;
+  box-shadow:0 2px 8px rgba(31,111,235,.3)}
 .bg-teal{background:#0f3d3d;color:#56d4c8;border:1px solid #0d6e6e}
 .bg-yellow{background:#5a3e13;color:#e3b341;border:1px solid #9e6a03}
 .bg-gray{background:#21262d;color:#c9d1d9;border:1px solid #30363d}
@@ -502,9 +523,10 @@ section+section{margin-top:2rem}
 .card{display:flex;flex-direction:row;gap:1.2rem;align-items:stretch;grid-column:1 / -1}
 .card-main{min-width:400px;flex-shrink:0;display:flex;flex-direction:column}
 .card-con{flex:1;min-width:0;display:flex;flex-direction:column}
-.console{background:#0a0c10;border:1px solid #21262d;border-radius:5px;
-  padding:.6rem .7rem;overflow-y:auto;font-family:'Consolas',monospace;
-  font-size:.76rem;color:#8b949e;line-height:1.55;height:420px;flex-shrink:0}
+.console{background:#0a0c10;border:1px solid #21262d;border-radius:8px;
+  padding:.7rem .8rem;overflow-y:auto;font-family:'Consolas',monospace;
+  font-size:.76rem;color:#8b949e;line-height:1.55;height:420px;flex-shrink:0;
+  box-shadow:inset 0 2px 8px rgba(0,0,0,.35)}
 .console p{white-space:pre-wrap;word-break:break-all}
 .cmd-row{display:flex;gap:.4rem;margin-top:.6rem;flex-shrink:0}
 .cmd-row input[type=text]{flex:1;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;
@@ -518,14 +540,18 @@ section+section{margin-top:2rem}
 .backup-row .bname{flex:1;font-family:monospace;color:#c9d1d9;font-size:.8rem;word-break:break-all}
 .backup-row .bmeta{color:#7d8590;white-space:nowrap}
 
-.empty{color:#7d8590;font-size:.88rem;padding:1.8rem;text-align:center;
-  border:1px dashed #30363d;border-radius:8px}
+.empty{color:#7d8590;font-size:.88rem;padding:2.2rem;text-align:center;
+  border:1px dashed #30363d;border-radius:12px;background:rgba(255,255,255,.015)}
 
 /* ── Add server modal ── */
-.overlay{position:fixed;inset:0;background:rgba(0,0,0,.78);display:none;
+.overlay{position:fixed;inset:0;background:rgba(1,4,9,.72);backdrop-filter:blur(2px);display:none;
   align-items:center;justify-content:center;z-index:100}
 .overlay.open{display:flex}
-.modal{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:1.5rem;width:min(520px,94vw)}
+.modal{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:1.5rem;width:min(520px,94vw);
+  box-shadow:0 12px 36px rgba(0,0,0,.5)}
+.spinner{width:32px;height:32px;border:3px solid #30363d;border-top-color:#58a6ff;
+  border-radius:50%;margin:0 auto;animation:cc-spin .8s linear infinite}
+@keyframes cc-spin{to{transform:rotate(360deg)}}
 .modal h3{margin-bottom:1.1rem;color:#f0f6fc;font-size:1rem}
 .frow{margin-bottom:.7rem}
 .frow label{display:block;font-size:.78rem;color:#7d8590;margin-bottom:.3rem}
@@ -573,26 +599,28 @@ section+section{margin-top:2rem}
 .upload-btn input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;font-size:100px}
 
 /* ── System stats card ── */
-.sys-card{background:#161b22;border:1px solid #30363d;border-radius:8px;
-  padding:1rem 1.4rem;display:grid;grid-template-columns:repeat(3,1fr);gap:1.4rem}
-.sys-col{display:flex;flex-direction:column;gap:.35rem}
-.sys-col-label{font-size:.7rem;font-weight:600;color:#7d8590;text-transform:uppercase;letter-spacing:.05em}
-.sys-col-val{font-size:.8rem;color:#c9d1d9}
-.sys-card .usage-bar{height:8px}
+.sys-card{background:linear-gradient(180deg,#161b22,#141920);border:1px solid #21262d;border-radius:12px;
+  padding:1.1rem 1.5rem;display:grid;grid-template-columns:repeat(3,1fr);gap:1.4rem;
+  box-shadow:0 2px 10px rgba(0,0,0,.3)}
+.sys-col{display:flex;flex-direction:column;gap:.4rem}
+.sys-col-label{font-size:.7rem;font-weight:700;color:#7d8590;text-transform:uppercase;letter-spacing:.08em}
+.sys-col-val{font-size:.85rem;color:#f0f6fc;font-weight:600}
+.sys-card .usage-bar{height:9px}
 
 /* ── Usage bars ── */
 .usage-bars{margin-top:.6rem}
 .usage-row{display:flex;align-items:center;gap:.5rem;margin-bottom:.32rem}
 .usage-label{font-size:.72rem;color:#7d8590;width:30px;flex-shrink:0}
-.usage-bar{flex:1;height:6px;background:#21262d;border-radius:3px;overflow:hidden}
-.usage-fill{height:100%;border-radius:3px;transition:width .6s ease}
-.cpu-fill{background:#1f6feb}
-.ram-fill{background:#238636}
-.ram-fill.hi{background:#e3b341}
-.ram-fill.crit{background:#f85149}
-.heap-fill{background:#7c3aed}
-.heap-fill.hi{background:#e3b341}
-.heap-fill.crit{background:#f85149}
+.usage-bar{flex:1;height:7px;background:#0a0d12;border-radius:20px;overflow:hidden;
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.5)}
+.usage-fill{height:100%;border-radius:20px;transition:width .6s ease}
+.cpu-fill{background:linear-gradient(90deg,#1f6feb,#58a6ff);box-shadow:0 0 8px rgba(88,166,255,.5)}
+.ram-fill{background:linear-gradient(90deg,#238636,#3fb950);box-shadow:0 0 8px rgba(63,185,80,.4)}
+.ram-fill.hi{background:#e3b341;box-shadow:0 0 8px rgba(227,179,65,.5)}
+.ram-fill.crit{background:#f85149;box-shadow:0 0 8px rgba(248,81,73,.5)}
+.heap-fill{background:linear-gradient(90deg,#7c3aed,#a371f7);box-shadow:0 0 8px rgba(124,58,237,.4)}
+.heap-fill.hi{background:#e3b341;box-shadow:0 0 8px rgba(227,179,65,.5)}
+.heap-fill.crit{background:#f85149;box-shadow:0 0 8px rgba(248,81,73,.5)}
 .heap-graph{margin-top:.45rem}
 .heap-graph svg{display:block;width:100%;height:64px;border-radius:4px;background:#0a0c10}
 .heap-legend{display:flex;gap:.8rem;margin-top:.25rem;font-size:.68rem;color:#484f58}
@@ -602,11 +630,14 @@ section+section{margin-top:2rem}
 .usage-val{font-size:.72rem;color:#7d8590;white-space:nowrap;min-width:90px;text-align:right}
 
 /* ── Nav tabs ── */
-nav#main-nav{display:flex;gap:.2rem;margin-left:.6rem}
-.nav-link{padding:.3rem .85rem;font-size:.83rem;color:#7d8590;border-radius:5px;
-  cursor:pointer;border:1px solid transparent;background:transparent;font-family:inherit;white-space:nowrap}
-.nav-link:hover{color:#c9d1d9;border-color:#30363d}
-.nav-link.active{color:#58a6ff;background:#1f2d45;border-color:#1f6feb}
+nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;padding:.25rem;
+  border-radius:10px;border:1px solid #21262d}
+.nav-link{padding:.32rem .95rem;font-size:.82rem;color:#7d8590;border-radius:7px;font-weight:600;
+  cursor:pointer;border:1px solid transparent;background:transparent;font-family:inherit;
+  white-space:nowrap;transition:color .15s,background .15s}
+.nav-link:hover{color:#c9d1d9}
+.nav-link.active{color:#eaf3ff;background:linear-gradient(180deg,#2361c9,#1f3a6e);
+  box-shadow:0 2px 6px rgba(31,111,235,.4)}
 .page{display:none}
 .page.active{display:block}
 
@@ -652,17 +683,17 @@ nav#main-nav{display:flex;gap:.2rem;margin-left:.6rem}
         <div class="sys-col">
           <span class="sys-col-label">CPU</span>
           <div id="sys-cpu-bar"><div class="usage-bar"><div class="usage-fill cpu-fill" style="width:0%"></div></div></div>
-          <span class="sys-col-val" id="sys-cpu-val">—</span>
+          <span class="sys-col-val" id="sys-cpu-val">-</span>
         </div>
         <div class="sys-col">
           <span class="sys-col-label">RAM</span>
           <div id="sys-ram-bar"><div class="usage-bar"><div class="usage-fill ram-fill" style="width:0%"></div></div></div>
-          <span class="sys-col-val" id="sys-ram-val">—</span>
+          <span class="sys-col-val" id="sys-ram-val">-</span>
         </div>
         <div class="sys-col">
           <span class="sys-col-label">Disk /</span>
           <div id="sys-disk-bar"><div class="usage-bar"><div class="usage-fill heap-fill" style="width:0%"></div></div></div>
-          <span class="sys-col-val" id="sys-disk-val">—</span>
+          <span class="sys-col-val" id="sys-disk-val">-</span>
         </div>
       </div>
     </section>
@@ -696,6 +727,7 @@ nav#main-nav{display:flex;gap:.2rem;margin-left:.6rem}
             <input type="checkbox" id="bak-selall" onchange="toggleBakSelAll(this.checked)" style="accent-color:#58a6ff"> All
           </label>
           <button class="btn bg-yellow" id="bak-restore" onclick="openRestore()" disabled style="font-size:.78rem;padding:.3rem .65rem">&#9100; Restore</button>
+          <button class="btn bg-blue"   id="bak-create"  onclick="openCreateFromBackup()" disabled style="font-size:.78rem;padding:.3rem .65rem">&#10133; Create Server</button>
           <button class="btn bg-danger" id="bak-del"     onclick="delBackups()"  disabled style="font-size:.78rem;padding:.3rem .65rem">&#128465; Delete Selected</button>
         </div>
       </div>
@@ -705,7 +737,7 @@ nav#main-nav{display:flex;gap:.2rem;margin-left:.6rem}
 </main>
 <footer style="text-align:center;padding:1.2rem 2rem;border-top:1px solid #30363d;margin-top:2rem;font-size:.75rem;color:#484f58">
   <a href="https://github.com/BeanGreen247/creepercrest" target="_blank" rel="noopener" style="color:#7d8590">CreeperCrest</a>
-  &nbsp;&mdash;&nbsp;
+  &nbsp;-&nbsp;
   <a href="https://github.com/BeanGreen247" target="_blank" rel="noopener" style="color:#7d8590">BeanGreen247</a>
 </footer>
 
@@ -780,6 +812,37 @@ nav#main-nav{display:flex;gap:.2rem;margin-left:.6rem}
       <button class="btn bg-gray" onclick="closeRestore()">Cancel</button>
       <button class="btn bg-yellow" onclick="submitRestore()">Restore</button>
     </div>
+  </div>
+</div>
+
+<!-- Create server from backup overlay -->
+<div class="overlay" id="cfb-overlay">
+  <div class="modal">
+    <h3>Create Server from Backup</h3>
+    <div class="frow"><label>Backup file</label><input id="cfb-fname" readonly style="cursor:default;color:#7d8590"/></div>
+    <div class="frow-2">
+      <div class="frow"><label>ID (letters, numbers, dash)</label><input id="cfb-id" placeholder="survival"/></div>
+      <div class="frow"><label>Display Name</label><input id="cfb-name" placeholder="Survival SMP"/></div>
+    </div>
+    <div class="frow"><label>Server Directory (full path)</label><input id="cfb-dir" placeholder="/home/crafty/servers/survival"/></div>
+    <div class="frow"><label>JAR filename</label><input id="cfb-jar" value="server.jar"/></div>
+    <div class="frow-2">
+      <div class="frow"><label>Min RAM (MB)</label><input id="cfb-min" type="number" value="512" min="256" step="256"/></div>
+      <div class="frow"><label>Max RAM (MB)</label><input id="cfb-max" type="number" value="2048" min="256" step="256"/></div>
+    </div>
+    <div class="frow"><label>Extra JVM args</label><input id="cfb-args" value="-XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:MaxGCPauseMillis=200"/></div>
+    <div class="modal-btns">
+      <button class="btn bg-gray" onclick="closeCreateFromBackup()">Cancel</button>
+      <button class="btn bg-green" onclick="submitCreateFromBackup()">Create Server</button>
+    </div>
+  </div>
+</div>
+
+<!-- Busy / progress overlay -->
+<div class="overlay" id="busy-overlay" style="z-index:400">
+  <div class="modal" style="width:min(360px,90vw);text-align:center;padding:2rem 1.6rem">
+    <div class="spinner"></div>
+    <p id="busy-label" style="margin-top:1.1rem;color:#c9d1d9;font-size:.87rem">Working...</p>
   </div>
 </div>
 
@@ -939,7 +1002,7 @@ function renderScheduleDisplay(ab) {
   el.innerHTML = `<div class="sched-banner ${en?'on':'off'}">
   <span class="sched-banner-icon">${en?'&#9989;':'&#8987;'}</span>
   <span class="sched-banner-text">${en
-    ? `Auto-backup is <b>active</b> — ${timeStr}, backs up all servers.`
+    ? `Auto-backup is <b>active</b> - ${timeStr}, backs up all servers.`
     : 'Auto-backup is <b>disabled</b>. <span>Click "Edit Schedule" to configure a recurring backup.</span>'
   }</span>
 </div>`;
@@ -1004,9 +1067,9 @@ function cardHTML(s) {
       <button class="btn bg-danger btn-full" onclick="delServer('${s.id}')">Remove</button>
     </div>
     <div class="usage-bars">
-      ${(()=>{if(s.cpu_pct===null)return '<div class="usage-row"><span class="usage-label">CPU</span><div class="usage-bar"></div><span class="usage-val" style="color:#484f58">—</span></div>';const pct=Math.min(s.cpu_pct,100);return '<div class="usage-row"><span class="usage-label">CPU</span><div class="usage-bar"><div class="usage-fill cpu-fill" style="width:'+pct+'%"></div></div><span class="usage-val">'+s.cpu_pct.toFixed(1)+'%</span></div>';})()}
-      ${(()=>{if(s.ram_mb===null)return '<div class="usage-row"><span class="usage-label">RAM</span><div class="usage-bar"></div><span class="usage-val" style="color:#484f58">—</span></div>';const pct=Math.min(s.memory_max_mb?Math.round(s.ram_mb/s.memory_max_mb*100):0,100);const cls=pct>=90?'crit':pct>=75?'hi':'';return '<div class="usage-row"><span class="usage-label">RAM</span><div class="usage-bar"><div class="usage-fill ram-fill '+cls+'" style="width:'+pct+'%"></div></div><span class="usage-val">'+s.ram_mb+' / '+s.memory_max_mb+' MB</span></div>';})()}
-      ${(()=>{if(s.heap_used_mb===null)return '<div class="usage-row"><span class="usage-label">Heap</span><div class="usage-bar"></div><span class="usage-val" style="color:#484f58">—</span></div>';const pct=Math.min(s.heap_total_mb?Math.round(s.heap_used_mb/s.heap_total_mb*100):0,100);const cls=pct>=90?'crit':pct>=75?'hi':'';return '<div class="usage-row"><span class="usage-label">Heap</span><div class="usage-bar"><div class="usage-fill heap-fill '+cls+'" style="width:'+pct+'%"></div></div><span class="usage-val">'+s.heap_used_mb+' / '+s.heap_total_mb+' MB</span></div>';})()}
+      ${(()=>{if(s.cpu_pct===null)return '<div class="usage-row"><span class="usage-label">CPU</span><div class="usage-bar"></div><span class="usage-val" style="color:#484f58">-</span></div>';const pct=Math.min(s.cpu_pct,100);return '<div class="usage-row"><span class="usage-label">CPU</span><div class="usage-bar"><div class="usage-fill cpu-fill" style="width:'+pct+'%"></div></div><span class="usage-val">'+s.cpu_pct.toFixed(1)+'%</span></div>';})()}
+      ${(()=>{if(s.ram_mb===null)return '<div class="usage-row"><span class="usage-label">RAM</span><div class="usage-bar"></div><span class="usage-val" style="color:#484f58">-</span></div>';const pct=Math.min(s.memory_max_mb?Math.round(s.ram_mb/s.memory_max_mb*100):0,100);const cls=pct>=90?'crit':pct>=75?'hi':'';return '<div class="usage-row"><span class="usage-label">RAM</span><div class="usage-bar"><div class="usage-fill ram-fill '+cls+'" style="width:'+pct+'%"></div></div><span class="usage-val">'+s.ram_mb+' / '+s.memory_max_mb+' MB</span></div>';})()}
+      ${(()=>{if(s.heap_used_mb===null)return '<div class="usage-row"><span class="usage-label">Heap</span><div class="usage-bar"></div><span class="usage-val" style="color:#484f58">-</span></div>';const pct=Math.min(s.heap_total_mb?Math.round(s.heap_used_mb/s.heap_total_mb*100):0,100);const cls=pct>=90?'crit':pct>=75?'hi':'';return '<div class="usage-row"><span class="usage-label">Heap</span><div class="usage-bar"><div class="usage-fill heap-fill '+cls+'" style="width:'+pct+'%"></div></div><span class="usage-val">'+s.heap_used_mb+' / '+s.heap_total_mb+' MB</span></div>';})()}
       <div class="heap-graph"><svg id="hg-${s.id}" viewBox="0 0 300 64" preserveAspectRatio="none"></svg><div class="heap-legend"><span><i class="hl-young"></i>Young GC</span><span><i class="hl-full"></i>Full GC</span></div></div>
     </div>
   </div>
@@ -1064,6 +1127,7 @@ function toggleBakSelAll(checked) {
 function updateBakDel() {
   document.getElementById('bak-del').disabled     = bakSel.size === 0;
   document.getElementById('bak-restore').disabled = bakSel.size !== 1;
+  document.getElementById('bak-create').disabled  = bakSel.size !== 1;
 }
 
 async function delBackups() {
@@ -1076,7 +1140,7 @@ async function delBackups() {
   }
   document.getElementById('bak-selall').checked = false;
   updateBakDel();
-  if (failed) flash(`Done — ${failed} deletion(s) failed`, true);
+  if (failed) flash(`Done - ${failed} deletion(s) failed`, true);
   else flash('Backup(s) deleted');
   refresh();
 }
@@ -1090,17 +1154,17 @@ function renderSysinfo(sys) {
   }
   setBar('sys-cpu-bar', 'cpu-fill',  sys.cpu_pct);
   document.getElementById('sys-cpu-val').textContent =
-    sys.cpu_pct !== null ? sys.cpu_pct.toFixed(1) + '%' : '—';
+    sys.cpu_pct !== null ? sys.cpu_pct.toFixed(1) + '%' : '-';
 
   const ramPct = sys.ram_total_mb ? Math.round(sys.ram_used_mb / sys.ram_total_mb * 100) : 0;
   setBar('sys-ram-bar', 'ram-fill', ramPct);
   document.getElementById('sys-ram-val').textContent = sys.ram_used_mb !== null
-    ? (sys.ram_used_mb / 1024).toFixed(1) + ' / ' + (sys.ram_total_mb / 1024).toFixed(1) + ' GB' : '—';
+    ? (sys.ram_used_mb / 1024).toFixed(1) + ' / ' + (sys.ram_total_mb / 1024).toFixed(1) + ' GB' : '-';
 
   const diskPct = sys.disk_total_gb ? Math.round(sys.disk_used_gb / sys.disk_total_gb * 100) : 0;
   setBar('sys-disk-bar', 'heap-fill', diskPct);
   document.getElementById('sys-disk-val').textContent = sys.disk_used_gb !== null
-    ? sys.disk_used_gb + ' / ' + sys.disk_total_gb + ' GB' : '—';
+    ? sys.disk_used_gb + ' / ' + sys.disk_total_gb + ' GB' : '-';
 }
 
 async function refresh() {
@@ -1144,7 +1208,7 @@ async function saveRAM(sid) {
   if (!min || min < 256) { flash('Min RAM must be at least 256 MB', true); return; }
   if (!max || max < min) { flash('Max RAM must be ≥ Min RAM', true); return; }
   const r = await api('POST', `/api/${sid}/config`, {memory_min_mb: min, memory_max_mb: max});
-  if (r.ok) flash('RAM saved — restart server to apply');
+  if (r.ok) flash('RAM saved - restart server to apply');
   else flash(r.error, true);
 }
 
@@ -1173,7 +1237,7 @@ function fetchAllLogs(list) {
 
 async function toggleAutostart(sid, current) {
   const r = await api('POST', `/api/${sid}/config`, {autostart: !current});
-  if (r.ok) flash(`Autostart ${!current ? 'enabled' : 'disabled'} — takes effect on next CreeperCrest restart`);
+  if (r.ok) flash(`Autostart ${!current ? 'enabled' : 'disabled'} - takes effect on next CreeperCrest restart`);
   else flash(r.error || r.msg, true);
   refresh();
 }
@@ -1212,7 +1276,7 @@ function openEdit(sid) {
   const s = _servers.find(x => x.id === sid);
   if (!s) return;
   _editSid = sid;
-  document.getElementById('modal-title').textContent = `Edit Server — ${s.name}`;
+  document.getElementById('modal-title').textContent = `Edit Server - ${s.name}`;
   document.getElementById('modal-submit-btn').textContent = 'Save Changes';
   document.getElementById('f-id-wrap').style.display = 'none';
   document.getElementById('f-name').value = s.name;
@@ -1265,7 +1329,7 @@ async function submitEdit() {
   const r = await api('POST', `/api/${sid}/config`, body);
   if (!r.ok) { flash(r.error || r.msg, true); return; }
   closeAdd();
-  flash(`"${body.name || sid}" saved — restart server to apply changes`);
+  flash(`"${body.name || sid}" saved - restart server to apply changes`);
   refresh();
 }
 
@@ -1363,7 +1427,7 @@ function openFB(sid) {
   fb.path = '';
   fb.sel  = new Set();
   const srv = document.querySelector(`#card-${sid} .card-name`);
-  document.getElementById('fb-title').textContent = 'Files — ' + (srv ? srv.textContent : sid);
+  document.getElementById('fb-title').textContent = 'Files - ' + (srv ? srv.textContent : sid);
   document.getElementById('fb-overlay').classList.add('open');
   loadDir('');
 }
@@ -1415,7 +1479,7 @@ function renderRows(entries) {
     return `<tr class="${e.type}">
   <td><input type="checkbox" data-name="${esc(e.name)}" onchange="toggleSel('${esc(e.name)}')"></td>
   <td>${icon} <span class="fn" onclick="${clickFn}">${esc(e.name)}</span></td>
-  <td class="fsize">${e.type === 'dir' ? '—' : e.size}</td>
+  <td class="fsize">${e.type === 'dir' ? '-' : e.size}</td>
   <td class="fdate">${e.modified}</td>
 </tr>`;
   }).join('');
@@ -1578,6 +1642,12 @@ function openRestore() {
 
 function closeRestore() { document.getElementById('restore-overlay').classList.remove('open'); }
 
+function busyShow(label) {
+  document.getElementById('busy-label').textContent = label;
+  document.getElementById('busy-overlay').classList.add('open');
+}
+function busyHide() { document.getElementById('busy-overlay').classList.remove('open'); }
+
 async function submitRestore() {
   const fname = document.getElementById('restore-fname').value;
   const sid   = document.getElementById('restore-sid').value;
@@ -1585,10 +1655,66 @@ async function submitRestore() {
   if (srv && srv.running) { flash('Stop the server before restoring', true); return; }
   if (!confirm(`Restore "${fname}" onto "${srv ? srv.name : sid}"?\n\nThis OVERWRITES all server files and cannot be undone.`)) return;
   closeRestore();
-  const r = await api('POST', '/api/restore', {backup: fname, sid});
-  if (r.ok) flash(`Restored ${fname}`);
-  else flash(r.msg || r.error, true);
+  busyShow('Restoring backup...');
+  try {
+    const r = await api('POST', '/api/restore', {backup: fname, sid});
+    if (r.ok) flash(`Restored ${fname}`);
+    else flash(r.msg || r.error, true);
+  } finally {
+    busyHide();
+  }
   refresh();
+}
+
+// -- Create server from backup ---------------------------------------------------
+
+function openCreateFromBackup() {
+  if (bakSel.size !== 1) return;
+  const fname = [...bakSel][0];
+  document.getElementById('cfb-fname').value = fname;
+  const guessed = fname.replace(/-\\d{8}-\\d{6}\\.zip$/, '');
+  const src = _servers.find(s => s.id === guessed);
+  let newId = guessed + '-restored';
+  while (_servers.some(s => s.id === newId)) newId += '2';
+  document.getElementById('cfb-id').value   = newId;
+  document.getElementById('cfb-name').value = src ? src.name + ' (restored)' : guessed;
+  document.getElementById('cfb-dir').value  = src
+    ? (src.directory.endsWith('/') ? src.directory.slice(0, -1) : src.directory) + '-restored'
+    : '';
+  document.getElementById('cfb-jar').value  = src ? src.jar           : 'server.jar';
+  document.getElementById('cfb-min').value  = src ? src.memory_min_mb : 512;
+  document.getElementById('cfb-max').value  = src ? src.memory_max_mb : 2048;
+  document.getElementById('cfb-args').value = src ? (src.extra_args || '')
+    : '-XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:MaxGCPauseMillis=200';
+  document.getElementById('cfb-overlay').classList.add('open');
+}
+
+function closeCreateFromBackup() { document.getElementById('cfb-overlay').classList.remove('open'); }
+
+async function submitCreateFromBackup() {
+  const g = id => document.getElementById(id).value.trim();
+  const body = {
+    backup:        g('cfb-fname'),
+    id:            g('cfb-id'),
+    name:          g('cfb-name'),
+    directory:     g('cfb-dir'),
+    jar:           g('cfb-jar') || 'server.jar',
+    memory_min_mb: parseInt(g('cfb-min')) || 512,
+    memory_max_mb: parseInt(g('cfb-max')) || 2048,
+    extra_args:    g('cfb-args'),
+  };
+  if (!body.id)        { flash('ID is required', true); return; }
+  if (!body.directory) { flash('Directory is required', true); return; }
+  if (body.memory_min_mb > body.memory_max_mb) { flash('Max RAM must be \\u2265 Min RAM', true); return; }
+  closeCreateFromBackup();
+  busyShow('Creating server and extracting backup...');
+  try {
+    const r = await api('POST', '/api/create_from_backup', body);
+    if (r.ok) { flash(`Server "${body.name || body.id}" created from backup`); refresh(); }
+    else flash(r.error, true);
+  } finally {
+    busyHide();
+  }
 }
 
 // ── Auto-backup schedule ───────────────────────────────────────────────────────
@@ -1617,7 +1743,7 @@ async function submitAutoBackup() {
     _autoBackupCfg = r.auto_backup;
     renderScheduleDisplay(r.auto_backup);
     flash(body.enabled
-      ? `Auto-backup scheduled — every ${body.day} at ${String(body.hour).padStart(2,'0')}:${String(body.minute).padStart(2,'0')}`
+      ? `Auto-backup scheduled - every ${body.day} at ${String(body.hour).padStart(2,'0')}:${String(body.minute).padStart(2,'0')}`
       : 'Auto-backup disabled');
     closeAutoBackup();
   } else flash(r.error || 'Failed to save schedule', true);
@@ -1731,14 +1857,14 @@ class Handler(BaseHTTPRequestHandler):
                 stat  = os.stat(fp)
                 mtime = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
                 if os.path.isdir(fp):
-                    entries.append({"name": name, "type": "dir",  "size": "—",                   "modified": mtime})
+                    entries.append({"name": name, "type": "dir",  "size": "-",                   "modified": mtime})
                 else:
                     entries.append({"name": name, "type": "file", "size": _fmt_size(stat.st_size), "modified": mtime})
             # dirs first
             entries.sort(key=lambda e: (0 if e["type"] == "dir" else 1, e["name"].lower()))
             return self.send_json({"path": rel, "entries": entries})
 
-        # /api/{id}/file?path=  — download single file
+        # /api/{id}/file?path=  - download single file
         if len(parts) == 3 and parts[0] == "api" and parts[2] == "file":
             sid = parts[1]
             if sid not in servers:
@@ -1782,7 +1908,7 @@ class Handler(BaseHTTPRequestHandler):
             ok, msg = restore_backup(fname, sid)
             return self.send_json({"ok": ok, "msg": msg})
 
-        # /api/auto_backup  — save auto-backup schedule
+        # /api/auto_backup  - save auto-backup schedule
         if parts == ["api", "auto_backup"]:
             b = self.body()
             sched = {
@@ -1797,7 +1923,7 @@ class Handler(BaseHTTPRequestHandler):
             save_cfg(cfg)
             return self.send_json({"ok": True, "auto_backup": sched})
 
-        # /api/import  — upload a zip, extract it, register a new server
+        # /api/import  - upload a zip, extract it, register a new server
         if parts == ["api", "import"]:
             ct = self.headers.get("Content-Type", "")
             cl = int(self.headers.get("Content-Length", 0))
@@ -1844,6 +1970,49 @@ class Handler(BaseHTTPRequestHandler):
             cfg["servers"][sid] = scfg
             save_cfg(cfg)
             servers[sid] = ManagedServer(sid, scfg)
+            return self.send_json({"ok": True, "id": sid})
+
+        # /api/create_from_backup - register a new server and extract a backup into it
+        if parts == ["api", "create_from_backup"]:
+            b     = self.body()
+            fname = b.get("backup", "").strip()
+            sid   = b.get("id", "").strip().lower().replace(" ", "-")
+            if not sid:
+                return self.send_json({"error": "id required"}, 400)
+            if sid in servers:
+                return self.send_json({"error": f'id "{sid}" already exists'}, 400)
+            if not fname:
+                return self.send_json({"error": "backup required"}, 400)
+            bak_dir = os.path.expanduser(cfg.get("backup_dir", "~/mc-backups"))
+            fpath   = os.path.join(bak_dir, fname)
+            if not fname.endswith(".zip") or not os.path.isfile(fpath):
+                return self.send_json({"error": "backup file not found"}, 400)
+            directory = b.get("directory", "").strip()
+            if not directory:
+                return self.send_json({"error": "directory required"}, 400)
+            dest = os.path.expanduser(directory)
+            os.makedirs(dest, exist_ok=True)
+            try:
+                with zipfile.ZipFile(fpath, "r") as zf:
+                    zf.extractall(dest)
+            except Exception as e:
+                return self.send_json({"error": f"failed to extract backup: {e}"}, 400)
+            legacy = max(256, int(b.get("memory_mb", 1024)))
+            scfg = {
+                "name":          b.get("name", sid).strip() or sid,
+                "directory":     directory,
+                "jar":           b.get("jar", "server.jar").strip() or "server.jar",
+                "memory_min_mb": max(256, int(b.get("memory_min_mb", legacy))),
+                "memory_max_mb": max(256, int(b.get("memory_max_mb", legacy))),
+                "extra_args":    b.get("extra_args", "").strip(),
+                "autostart":     False,
+            }
+            if scfg["memory_min_mb"] > scfg["memory_max_mb"]:
+                return self.send_json({"error": "max RAM must be >= min RAM"}, 400)
+            cfg["servers"][sid] = scfg
+            save_cfg(cfg)
+            servers[sid] = ManagedServer(sid, scfg)
+            servers[sid]._append(f"[CreeperCrest] Created from backup: {fname}")
             return self.send_json({"ok": True, "id": sid})
 
         # /api/add
@@ -1902,7 +2071,7 @@ class Handler(BaseHTTPRequestHandler):
                     saved += 1
                 return self.send_json({"ok": True, "count": saved})
 
-            # /api/{id}/mkdir?path=  — create a folder
+            # /api/{id}/mkdir?path=  - create a folder
             if action == "mkdir":
                 b    = self.body()
                 name = os.path.basename(b.get("name", "").strip().strip("/\\"))
@@ -1924,7 +2093,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({"error": str(e)}, 500)
                 return self.send_json({"ok": True, "name": name})
 
-            # /api/{id}/zip  — download selected files as zip
+            # /api/{id}/zip  - download selected files as zip
             if action == "zip":
                 b     = self.body()
                 paths = b.get("files", [])
@@ -1994,7 +2163,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         parts = self.segs()
 
-        # /api/backup/{filename}  — delete a backup zip
+        # /api/backup/{filename}  - delete a backup zip
         if len(parts) == 3 and parts[0] == "api" and parts[1] == "backup":
             fname   = unquote(parts[2])
             bak_dir = os.path.expanduser(cfg.get("backup_dir", "~/mc-backups"))
@@ -2007,7 +2176,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self.send_json({"error": str(e)}, 500)
 
-        # /api/{id}  — remove server and delete its directory
+        # /api/{id}  - remove server and delete its directory
         if len(parts) == 2 and parts[0] == "api":
             sid = parts[1]
             if sid not in servers:
@@ -2026,7 +2195,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({"ok": True, "warn": f"Removed from config but could not delete directory: {e}"})
             return self.send_json({"ok": True})
 
-        # /api/{id}/file?path=  — delete file or directory
+        # /api/{id}/file?path=  - delete file or directory
         if len(parts) == 3 and parts[0] == "api" and parts[2] == "file":
             sid = parts[1]
             if sid not in servers:
@@ -2059,7 +2228,7 @@ def main():
     port = int(cfg.get("port", 8080))
 
     def shutdown(*_):
-        print("\nShutting down — stopping all running servers…")
+        print("\nShutting down - stopping all running servers…")
         for srv in servers.values():
             if srv.is_running():
                 print(f"  Stopping {srv.id}…")

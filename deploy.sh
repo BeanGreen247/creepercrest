@@ -51,7 +51,7 @@ copy_if_different() {
 copy_if_different "$SCRIPT_DIR/creepercrest.py" "$TARGET_DIR/creepercrest.py" "creepercrest.py"
 copy_if_different "$SCRIPT_DIR/README.md"       "$TARGET_DIR/README.md"       "README.md"
 
-# Only copy config if one doesn't already exist — preserve existing settings
+# Only copy config if one doesn't already exist - preserve existing settings
 if [ ! -f "$TARGET_DIR/config.json" ]; then
     copy_if_different "$SCRIPT_DIR/config.json" "$TARGET_DIR/config.json" "config.json"
     echo "  config.json  → created"
@@ -87,7 +87,7 @@ sudo systemctl enable creepercrest
 
 # Restart if already running, otherwise start fresh
 if sudo systemctl is-active --quiet creepercrest; then
-    echo "  Service already running — restarting..."
+    echo "  Service already running - restarting..."
     sudo systemctl restart creepercrest
 else
     sudo systemctl start creepercrest
