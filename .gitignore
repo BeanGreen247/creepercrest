@@ -37,3 +37,5 @@ Thumbs.db
 # Secrets / local config
 .env
 .env.*
+users.json
+users.json.tmp
