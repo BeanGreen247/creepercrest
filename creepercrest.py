@@ -12,10 +12,22 @@ import zipfile
 import time
 import threading
 import subprocess
+import hashlib
+import socket
+import uuid
+import base64
+import ipaddress
+import ssl
+import hmac
+import secrets
+import struct
+from html import escape as html_escape
+from http.cookies import SimpleCookie
+import urllib.request
 from datetime import datetime
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, parse_qs, unquote, quote
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -40,6 +52,93 @@ def load_cfg():
 def save_cfg(data):
     with open(CFG_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+
+# ── Background jobs (progress reporting) ───────────────────────────────────────
+
+_jobs = {}
+_jobs_lock = threading.Lock()
+
+class Job:
+    def __init__(self, label, unit):
+        self.id     = uuid.uuid4().hex[:12]
+        self.label  = label
+        self.unit   = unit      # "bytes" or "files"
+        self.done   = 0
+        self.total  = 0
+        self.state  = "running"
+        self.result = None
+        self.error  = None
+        self.t      = time.time()
+
+    def view(self):
+        return {"state": self.state, "label": self.label, "unit": self.unit, "done": self.done,
+                "total": self.total, "result": self.result, "error": self.error}
+
+def start_job(label, fn, unit="bytes"):
+    """Run fn(job) in a thread; the UI polls /api/job/<id> for progress."""
+    job = Job(label, unit)
+    with _jobs_lock:
+        for k in [k for k, j in _jobs.items() if j.state != "running" and time.time() - j.t > 600]:
+            del _jobs[k]
+        _jobs[job.id] = job
+    def run():
+        try:
+            job.result = fn(job)
+            job.state  = "done"
+        except Exception as e:
+            job.error = str(e) or e.__class__.__name__
+            job.state = "error"
+        job.t = time.time()
+    threading.Thread(target=run, daemon=True, name=f"job-{job.id}").start()
+    return job.id
+
+def _expect_ok(res):
+    ok, val = res
+    if not ok:
+        raise RuntimeError(val)
+    return val
+
+def _extract_zip(zf, dest, job=None):
+    members = zf.infolist()
+    if job:
+        job.unit, job.total, job.done = "files", len(members), 0
+    for m in members:
+        zf.extract(m, dest)
+        if job:
+            job.done += 1
+
+# ── Default JVM arguments ──────────────────────────────────────────────────────
+
+_JVM_BASE_ARGS = "-XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:MaxGCPauseMillis=100 -XX:+ParallelRefProcEnabled -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=20 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1"
+
+_java_major = None
+
+def host_java_major():
+    """Major version of the `java` on PATH, or None."""
+    global _java_major
+    if _java_major is None:
+        try:
+            out = subprocess.run(["java", "-version"], capture_output=True, text=True, timeout=10).stderr
+            m = re.search(r'version "(\d+)(?:\.(\d+))?', out)
+            if m:
+                _java_major = int(m.group(2) or 0) if m.group(1) == "1" else int(m.group(1))
+        except (OSError, subprocess.SubprocessError):
+            pass
+        _java_major = _java_major or 0
+    return _java_major or None
+
+def required_java(ver):
+    """Java major version Mojang lists for a Minecraft release, or None if unknown."""
+    m = _get_json("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
+    entry = next((v for v in m["versions"] if v["id"] == ver), None)
+    if not entry:
+        return None
+    return _get_json(entry["url"]).get("javaVersion", {}).get("majorVersion")
+
+def default_jvm_args():
+    """Tuned G1 flags; GC thread counts follow the host CPU count (all threads parallel, half concurrent)."""
+    n = os.cpu_count() or 4
+    return f"{_JVM_BASE_ARGS} -XX:ParallelGCThreads={n} -XX:ConcGCThreads={max(1, n // 2)}"
 
 # ── System info ────────────────────────────────────────────────────────────────
 
@@ -121,12 +220,280 @@ def _get_sysinfo():
 
 # ── Managed server ─────────────────────────────────────────────────────────────
 
+def _set_properties(directory, updates):
+    """Set keys in <directory>/server.properties, preserving other lines."""
+    path = os.path.join(os.path.expanduser(directory), "server.properties")
+    lines = []
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    pending = dict(updates)
+    for i, line in enumerate(lines):
+        key = line.split("=", 1)[0].strip()
+        if not line.lstrip().startswith("#") and key in pending:
+            lines[i] = f"{key}={pending.pop(key)}"
+    lines += [f"{k}={v}" for k, v in pending.items()]
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+def _check_pack(url, sha1, prompt=""):
+    if re.search(r"[\r\n]", prompt) or len(prompt) > 256:
+        return "Resource pack prompt must be one line, 256 characters or fewer"
+    if url and not re.match(r"^https?://", url, re.I):
+        return "Resource pack URL must start with http:// or https://"
+    if sha1 and not re.fullmatch(r"[0-9a-f]{40}", sha1):
+        return "Resource pack SHA-1 must be 40 hex characters"
+    return None
+
+def _apply_resource_pack(scfg):
+    """Write the pack keys to server.properties; 1.20.3+ also wants a stable resource-pack-id UUID."""
+    if scfg.get("resource_pack") and not scfg.get("resource_pack_id"):
+        scfg["resource_pack_id"] = str(uuid.uuid4())
+    _set_properties(scfg["directory"], {
+        "resource-pack":         scfg.get("resource_pack", ""),
+        "resource-pack-sha1":    scfg.get("resource_pack_sha1", ""),
+        "resource-pack-id":      scfg.get("resource_pack_id", "") if scfg.get("resource_pack") else "",
+        "require-resource-pack": _bool(scfg.get("resource_pack_required", False)),
+        "resource-pack-prompt":  _prop_escape(scfg.get("resource_pack_prompt", "")),
+    })
+
+RP_MAX_BYTES = 250 * 1024 * 1024
+
+def _rp_path(srv):
+    return os.path.join(os.path.expanduser(srv.cfg.get("directory", "")), "resource-pack.zip")
+
+def _lan_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("10.255.255.255", 1))
+        return s.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+def _pack_base(host):
+    """Public base URL for the hosted pack; a localhost Host header is useless to players, so use the LAN IP."""
+    if cfg.get("public_url"):
+        return cfg["public_url"].rstrip("/")
+    name, _, port = host.partition(":") if not host.startswith("[") else (host, "", "")
+    if name in ("localhost", "127.0.0.1", "[::1]"):
+        name = _lan_ip()
+    return f"http://{name}:{port}" if port else f"http://{name}"
+
+def _rp_result(srv, url):
+    return {"msg": url, "sha1": srv.cfg.get("resource_pack_sha1", "")}
+
+def install_resource_pack(srv, data, host):
+    """Validate + store a pack zip in the server dir, host it via CreeperCrest, point server.properties at it."""
+    if len(data) > RP_MAX_BYTES:
+        return False, "Pack larger than 250 MB"
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            if "pack.mcmeta" not in zf.namelist():
+                return False, "Not a resource pack (pack.mcmeta missing at zip root)"
+    except zipfile.BadZipFile:
+        return False, "Not a valid zip file"
+    directory = os.path.expanduser(srv.cfg.get("directory", ""))
+    if not directory or not os.path.isdir(directory):
+        return False, "Server directory not found"
+    with open(_rp_path(srv), "wb") as f:
+        f.write(data)
+    base = _pack_base(host)
+    srv.cfg["resource_pack"]      = f"{base}/resourcepack/{srv.id}.zip"
+    srv.cfg["resource_pack_sha1"] = hashlib.sha1(data).hexdigest()
+    _apply_resource_pack(srv.cfg)
+    cfg["servers"][srv.id] = srv.cfg
+    save_cfg(cfg)
+    srv._append(f"[CreeperCrest] Resource pack installed ({len(data)//1024} KB), hosted at {srv.cfg['resource_pack']}")
+    return True, srv.cfg["resource_pack"]
+
+def _assert_public_url(url):
+    """Refuse URLs that resolve to loopback/private/link-local addresses (SSRF), unless LAN mode allows it."""
+    if cfg.get("lan_mode") or cfg.get("allow_private_fetch"):
+        return
+    host = urlparse(url).hostname
+    if not host:
+        raise ValueError("invalid URL")
+    for info in socket.getaddrinfo(host, None):
+        if not ipaddress.ip_address(info[4][0].split("%")[0]).is_global:
+            raise ValueError("refusing to fetch from a private or internal address")
+
+class _SafeRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not re.match(r"^https?://", newurl, re.I):
+            raise ValueError("redirect to a non-http URL refused")
+        _assert_public_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+_opener = urllib.request.build_opener(_SafeRedirect)
+
+def _stream(url, write, job=None, limit=None):
+    """Stream url into write(); socket timeout is per read, so a stalled host errors out instead of hanging."""
+    if not re.match(r"^https?://", url, re.I):
+        raise ValueError("URL must start with http:// or https://")
+    _assert_public_url(url)
+    req = urllib.request.Request(url, headers={"User-Agent": "CreeperCrest"})
+    with _opener.open(req, timeout=30) as r:
+        total = int(r.headers.get("Content-Length") or 0)
+        if limit and total > limit:
+            raise ValueError(f"File larger than {limit // 1048576} MB")
+        if job:
+            job.unit, job.total, job.done = "bytes", total, 0
+        n = 0
+        while True:
+            chunk = r.read(256 * 1024)
+            if not chunk:
+                break
+            n += len(chunk)
+            if limit and n > limit:
+                raise ValueError(f"File larger than {limit // 1048576} MB")
+            write(chunk)
+            if job:
+                job.done = n
+
+def fetch_url(url, job=None):
+    buf = io.BytesIO()
+    _stream(url, buf.write, job, RP_MAX_BYTES)
+    return buf.getvalue()
+
+# ── server.properties validation (wizard) ──────────────────────────────────────
+
+def _bool(v):
+    return "true" if str(v).lower() in ("true", "1", "yes", "on") else "false"
+
+_ENUM = lambda *vals: {v: v for v in vals}
+_PROP_SPECS = {
+    "motd":                 ("str", 200),
+    "level-name":           ("name", 60),
+    "level-seed":           ("str", 200),
+    "level-type":           ("enum", {"normal": "minecraft\\:normal", "flat": "minecraft\\:flat",
+                                      "large_biomes": "minecraft\\:large_biomes",
+                                      "amplified": "minecraft\\:amplified"}),
+    "gamemode":             ("enum", _ENUM("survival", "creative", "adventure", "spectator")),
+    "difficulty":           ("enum", _ENUM("peaceful", "easy", "normal", "hard")),
+    "max-players":          ("int", 1, 1000),
+    "server-port":          ("int", 1024, 65535),
+    "view-distance":        ("int", 2, 32),
+    "simulation-distance":  ("int", 3, 32),
+    "spawn-protection":     ("int", 0, 1000),
+    "online-mode":          ("bool",),
+    "pvp":                  ("bool",),
+    "hardcore":             ("bool",),
+    "white-list":           ("bool",),
+    "allow-flight":         ("bool",),
+    "allow-nether":         ("bool",),
+    "enable-command-block": ("bool",),
+}
+
+def _prop_escape(v):
+    out = []
+    for ch in v.replace("\\", "\\\\"):
+        out.append(ch if 32 <= ord(ch) < 127 else f"\\u{ord(ch):04x}")
+    return "".join(out)
+
+def validate_props(raw):
+    """Return (props ready to write, error)."""
+    out = {}
+    for k, v in (raw or {}).items():
+        spec = _PROP_SPECS.get(k)
+        if not spec:
+            return None, f"unknown property: {k}"
+        v = str(v).strip()
+        kind = spec[0]
+        if kind in ("str", "name"):
+            if re.search(r"[\r\n]", v) or len(v) > spec[1]:
+                return None, f"invalid value for {k}"
+            if kind == "name" and (not v or re.search(r"[/\\]|\.\.", v)):
+                return None, f"invalid value for {k}"
+            out[k] = _prop_escape(v)
+        elif kind == "enum":
+            if v not in spec[1]:
+                return None, f"invalid value for {k}"
+            out[k] = spec[1][v]
+        elif kind == "int":
+            try:
+                n = int(v)
+            except ValueError:
+                return None, f"{k} must be a number"
+            if not spec[1] <= n <= spec[2]:
+                return None, f"{k} must be between {spec[1]} and {spec[2]}"
+            out[k] = str(n)
+        else:
+            out[k] = _bool(v)
+    return out, None
+
+def list_dirs(path):
+    path = os.path.abspath(os.path.expanduser(path or "~"))
+    if not os.path.isdir(path):
+        raise ValueError("not a directory")
+    names = sorted((n for n in os.listdir(path)
+                    if not n.startswith(".") and os.path.isdir(os.path.join(path, n))), key=str.lower)
+    return {"path": path, "parent": os.path.dirname(path) if path != os.path.dirname(path) else None,
+            "dirs": names, "home": os.path.expanduser("~")}
+
+# ── Server JAR providers ───────────────────────────────────────────────────────
+
+JAR_TYPES = {"vanilla": "Vanilla", "paper": "Paper", "purpur": "Purpur", "fabric": "Fabric"}
+
+def _get_json(url):
+    return json.loads(fetch_url(url))
+
+def jar_versions(jtype):
+    """Release versions for a provider, newest first."""
+    if jtype == "vanilla":
+        m = _get_json("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
+        return [v["id"] for v in m["versions"] if v["type"] == "release"]
+    if jtype == "paper":
+        d = _get_json("https://fill.papermc.io/v3/projects/paper")
+        return [v for grp in d["versions"].values() for v in grp if "-" not in v]
+    if jtype == "purpur":
+        return list(reversed(_get_json("https://api.purpurmc.org/v2/purpur")["versions"]))
+    if jtype == "fabric":
+        return [v["version"] for v in _get_json("https://meta.fabricmc.net/v2/versions/game") if v["stable"]]
+    raise ValueError("unknown server type")
+
+def jar_url(jtype, ver):
+    if jtype == "vanilla":
+        m = _get_json("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
+        entry = next((v for v in m["versions"] if v["id"] == ver), None)
+        if not entry:
+            raise ValueError("unknown version")
+        server = _get_json(entry["url"])["downloads"].get("server")
+        if not server:
+            raise ValueError("no server jar published for this version")
+        return server["url"]
+    if jtype == "paper":
+        d = _get_json(f"https://fill.papermc.io/v3/projects/paper/versions/{ver}/builds/latest")
+        return d["downloads"]["server:default"]["url"]
+    if jtype == "purpur":
+        return f"https://api.purpurmc.org/v2/purpur/{ver}/latest/download"
+    if jtype == "fabric":
+        loader    = next(v["version"] for v in _get_json("https://meta.fabricmc.net/v2/versions/loader") if v["stable"])
+        installer = next(v["version"] for v in _get_json("https://meta.fabricmc.net/v2/versions/installer") if v["stable"])
+        return f"https://meta.fabricmc.net/v2/versions/loader/{ver}/{loader}/{installer}/server/jar"
+    raise ValueError("unknown server type")
+
+def download_jar(jtype, ver, dest_path, job=None):
+    if not re.match(r"^[A-Za-z0-9._-]+$", ver or ""):
+        raise ValueError("invalid version")
+    tmp = dest_path + ".part"
+    try:
+        with open(tmp, "wb") as f:
+            _stream(jar_url(jtype, ver), f.write, job, 1 << 29)
+        os.replace(tmp, dest_path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
 class ManagedServer:
     def __init__(self, sid, scfg):
         self.id      = sid
         self.cfg     = scfg
         self.process = None
         self.logs    = deque(maxlen=300)
+        self.log_seq = 0
         self._lock   = threading.Lock()
 
     def is_running(self):
@@ -203,6 +570,7 @@ class ManagedServer:
 
     def _append(self, line):
         self.logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {line}")
+        self.log_seq += 1
 
     def _tail(self):
         try:
@@ -261,6 +629,10 @@ class ManagedServer:
             "jar":           self.cfg.get("jar", "server.jar"),
             "extra_args":    self.cfg.get("extra_args", ""),
             "autostart":     self.cfg.get("autostart", False),
+            "resource_pack":      self.cfg.get("resource_pack", ""),
+            "resource_pack_sha1": self.cfg.get("resource_pack_sha1", ""),
+            "resource_pack_required": bool(self.cfg.get("resource_pack_required", False)),
+            "resource_pack_prompt":   self.cfg.get("resource_pack_prompt", ""),
             "cpu_pct":       cpu_pct,
             "ram_mb":        ram_mb,
             "heap_used_mb":  heap_used_mb,
@@ -274,11 +646,290 @@ class ManagedServer:
 cfg     = load_cfg()
 servers = {sid: ManagedServer(sid, sc) for sid, sc in cfg.get("servers", {}).items()}
 
+# ── Authentication (password + TOTP 2FA) ───────────────────────────────────────
+
+USERS_FILE    = os.path.join(BASE_DIR, "users.json")
+MAX_UPLOAD    = 2 * 1024 ** 3                 # largest accepted request body (uploads are held in memory)
+_OPEN_TOKEN   = secrets.token_urlsafe(24)     # CSRF token for LAN / open mode (no session to bind it to)
+TLS_ON        = bool(cfg.get("tls_cert") and cfg.get("tls_key"))
+AUTH_DISABLED = bool(cfg.get("auth_disabled", False))
+SESSION_IDLE  = 8 * 3600
+SESSION_MAX   = 24 * 3600
+USER_RE       = re.compile(r"^[a-z0-9][a-z0-9_.-]{1,31}$")
+
+def load_users():
+    try:
+        with open(USERS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+def save_users(users):
+    tmp = USERS_FILE + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(users, f, indent=2)
+    os.replace(tmp, USERS_FILE)
+
+_SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2 ** 15, 8, 1
+
+def hash_password(pw):
+    salt = os.urandom(16)
+    h = hashlib.scrypt(pw.encode(), salt=salt, n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P, dklen=32, maxmem=128 * 1024 * 1024)
+    return f"scrypt${_SCRYPT_N}${_SCRYPT_R}${_SCRYPT_P}$" + base64.b64encode(salt).decode() + "$" + base64.b64encode(h).decode()
+
+def verify_password(pw, stored):
+    try:
+        f = stored.split("$")
+        n, r, pp = (2 ** 14, 8, 1) if len(f) == 3 else (int(f[1]), int(f[2]), int(f[3]))   # 3-part = original format
+        salt, want = f[-2], f[-1]
+        if n > 2 ** 17:
+            return False
+        h = hashlib.scrypt(pw.encode(), salt=base64.b64decode(salt), n=n, r=r, p=pp, dklen=32, maxmem=256 * 1024 * 1024)
+        return hmac.compare_digest(h, base64.b64decode(want))
+    except (ValueError, TypeError, IndexError):
+        return False
+
+_DUMMY_HASH = hash_password("creepercrest-dummy")   # equalises timing for unknown usernames
+_DUMMY_TOTP = "JBSWY3DPEHPK3PXP"
+
+def new_totp_secret():
+    return base64.b32encode(os.urandom(20)).decode().rstrip("=")
+
+def totp_at(secret, counter):
+    key  = base64.b32decode(secret + "=" * (-len(secret) % 8))
+    h    = hmac.new(key, struct.pack(">Q", counter), "sha1").digest()
+    o    = h[-1] & 15
+    return f"{(struct.unpack('>I', h[o:o + 4])[0] & 0x7fffffff) % 10 ** 6:06d}"
+
+_totp_last = {}   # username -> last accepted time step (blocks code replay)
+
+def verify_totp(secret, code, user=None):
+    """Return the matching time step (truthy) or 0. Does not consume it - call mark_totp_used after a full login."""
+    code = re.sub(r"\s", "", code or "")
+    if not re.fullmatch(r"\d{6}", code):
+        return 0
+    now, found = int(time.time() // 30), 0
+    for step in (now - 1, now, now + 1):
+        if hmac.compare_digest(totp_at(secret, step), code) and step > _totp_last.get(user, 0):
+            found = step
+    return found
+
+def mark_totp_used(user, step):
+    _totp_last[user] = step
+
+def totp_uri(user, secret):
+    return (f"otpauth://totp/CreeperCrest:{quote(user)}?secret={secret}"
+            "&issuer=CreeperCrest&algorithm=SHA1&digits=6&period=30")
+
+def qr_svg_img(uri):
+    """Inline QR code if the optional `qrcode` module is installed, else ''."""
+    try:
+        import qrcode, qrcode.image.svg
+        buf = io.BytesIO()
+        qrcode.make(uri, image_factory=qrcode.image.svg.SvgFillImage).save(buf)
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        return (f'<img src="data:image/svg+xml;base64,{b64}" width="200" height="200" alt="TOTP QR code" '
+                'style="display:block;background:#fff;padding:8px;border-radius:6px"/>')
+    except Exception:
+        return ""
+
+def qr_ascii(uri):
+    """Terminal QR via `qrencode` if installed, else None."""
+    try:
+        r = subprocess.run(["qrencode", "-t", "ANSIUTF8", "-m", "1", uri], capture_output=True, text=True, timeout=5)
+        return r.stdout if r.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+# sessions + login throttling (in memory; a restart logs everyone out)
+_sessions  = {}
+_sess_lock = threading.Lock()
+_fails     = {}
+_FAIL_WINDOW, _FAIL_IP, _FAIL_USER = 900, 5, 10
+
+def _prune_fails(key):
+    cutoff = time.time() - _FAIL_WINDOW
+    _fails[key] = [t for t in _fails.get(key, []) if t > cutoff]
+    return _fails[key]
+
+def login_throttled(ip, user):
+    return len(_prune_fails("ip:" + ip)) >= _FAIL_IP or len(_prune_fails("user:" + user)) >= _FAIL_USER
+
+def record_login_failure(ip, user):
+    for key in ("ip:" + ip, "user:" + user):
+        _prune_fails(key).append(time.time())
+
+def create_session(user):
+    tok = secrets.token_urlsafe(32)
+    now = time.time()
+    with _sess_lock:
+        for k in [k for k, v in _sessions.items() if now - v["created"] > SESSION_MAX or now - v["last"] > SESSION_IDLE]:
+            del _sessions[k]
+        _sessions[tok] = {"user": user, "csrf": secrets.token_urlsafe(24), "created": now, "last": now}
+    return tok
+
+def get_session(tok):
+    now = time.time()
+    with _sess_lock:
+        s = _sessions.get(tok)
+        if not s:
+            return None
+        if now - s["created"] > SESSION_MAX or now - s["last"] > SESSION_IDLE:
+            del _sessions[tok]
+            return None
+        s["last"] = now
+        return s
+
+def drop_session(tok):
+    with _sess_lock:
+        _sessions.pop(tok, None)
+
+_AUTH_CSS = """*{box-sizing:border-box;margin:0}body{background:#0d1117;color:#c9d1d9;font-family:system-ui,sans-serif;
+min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1rem}
+.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:1.8rem;width:min(400px,94vw);box-shadow:0 12px 36px rgba(0,0,0,.5)}
+h1{font-size:1.1rem;color:#f0f6fc;margin-bottom:1.2rem}label{display:block;font-size:.78rem;color:#7d8590;margin:.8rem 0 .3rem}
+input{width:100%;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:8px;padding:.55rem .7rem;font-size:.9rem}
+input:focus{outline:none;border-color:#58a6ff}.totp{letter-spacing:.25em;text-align:center;font-size:1.1rem}
+button{width:100%;margin-top:1.2rem;background:#238636;color:#fff;border:0;border-radius:8px;padding:.6rem;font-weight:600;cursor:pointer}
+.err{background:#3d1616;color:#f85149;border:1px solid #8b1a1a;border-radius:8px;padding:.5rem .7rem;font-size:.82rem;margin-bottom:.4rem}
+p{font-size:.85rem;line-height:1.5;color:#8b949e}code{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:.15rem .4rem;color:#c9d1d9;word-break:break-all}
+a{color:#58a6ff}"""
+
+def _acct_html(user):
+    if user.startswith("("):
+        return '<span style="color:#e3b341">LAN mode &middot; no login</span>'
+    return (f'{html_escape(user)} &middot; <a href="/2fa-setup" style="color:#58a6ff">2FA</a> &middot; '
+            '<a href="#" onclick="logout();return false" style="color:#58a6ff">Logout</a>')
+
+def render_login(error=""):
+    err = f'<div class="err">{html_escape(error)}</div>' if error else ""
+    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%233eae30'/%3E%3C/svg%3E">
+<title>Creeper Crest - Sign in</title><style>{_AUTH_CSS}</style></head><body><form class="card" method="post" action="/login" autocomplete="off">
+<h1>Creeper Crest</h1>{err}
+<label for="u">Username</label><input id="u" name="username" autocomplete="username" autofocus required>
+<label for="p">Password</label><input id="p" name="password" type="password" autocomplete="current-password" required>
+<label for="t">Authenticator code</label><input id="t" name="totp" class="totp" inputmode="numeric" maxlength="7" placeholder="000000" autocomplete="one-time-code" required>
+<button type="submit">Sign in</button></form></body></html>"""
+
+def render_setup_required():
+    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Creeper Crest - Setup required</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%233eae30'/%3E%3C/svg%3E">
+<style>{_AUTH_CSS}</style></head><body><div class="card"><h1>Setup required</h1>
+<p>No users exist yet, so the panel is locked. On the server, create a login (it prints a generated password and a 2FA secret):</p>
+<p style="margin-top:.8rem"><code>python3 creepercrest.py adduser yourname</code></p>
+<p style="margin-top:.8rem">Then reload this page.</p></div></body></html>"""
+
+def render_2fa_setup(user):
+    rec = load_users().get(user)
+    if not rec:
+        return render_setup_required()
+    uri = totp_uri(user, rec["totp"])
+    qr  = qr_svg_img(uri) or "<p>Install the optional <code>qrcode</code> Python module to show a QR code here, or enter the key manually.</p>"
+    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Creeper Crest - 2FA</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%233eae30'/%3E%3C/svg%3E">
+<style>{_AUTH_CSS}</style></head><body><div class="card"><h1>Two-factor authentication</h1>
+<p style="color:#3fb950;font-weight:600">2FA is active for {html_escape(user)}</p>
+<p style="margin:.8rem 0">Add this account to Google Authenticator, Authy, or any TOTP app.</p>{qr}
+<label>Setup key (manual entry)</label><code style="display:block;padding:.5rem">{html_escape(rec['totp'])}</code>
+<p style="margin-top:1rem"><a href="/">Back to panel</a></p></div></body></html>"""
+
+def cli(argv):
+    """User management: adduser / passwd / reset-2fa / deluser / users."""
+    import getpass
+    cmd = _CLI_ALIASES.get(argv[0], argv[0])
+    if cmd == "lan-mode":
+        want = argv[1].lower() if len(argv) > 1 else "status"
+        if want in ("on", "off"):
+            cfg["lan_mode"] = (want == "on")
+            save_cfg(cfg)
+            print(f"LAN mode {'ENABLED' if cfg['lan_mode'] else 'disabled'}. Restart CreeperCrest to apply.")
+            if cfg["lan_mode"]:
+                print("Clients on private networks (192.168.x, 10.x, 172.16-31.x, localhost) need no login; "
+                      "any other address still must sign in. Do NOT port-forward this panel to the internet.")
+        else:
+            print("LAN mode is", "on" if cfg.get("lan_mode") else "off")
+        return 0
+    users = load_users()
+    if cmd == "users":
+        for name in sorted(users):
+            print(name)
+        return 0
+    if len(argv) < 2:
+        print(f"usage: creepercrest.py {argv[0]} <username> [--prompt | --yes]")
+        return 2
+    name = argv[1].strip().lower()
+    prompt = "--prompt" in argv
+
+    def pick_password():
+        if not prompt:
+            return secrets.token_urlsafe(15), True
+        a, b = getpass.getpass("Password (12+ chars): "), getpass.getpass("Repeat: ")
+        if a != b or len(a) < 12:
+            raise SystemExit("Passwords differ or are shorter than 12 characters.")
+        return a, False
+
+    def show(pw, generated, secret):
+        uri = totp_uri(name, secret)
+        print(f"\n  Username : {name}")
+        if generated:
+            print(f"  Password : {pw}   (shown once - store it in your password manager)")
+        print(f"  2FA key  : {secret}")
+        print(f"  2FA URI  : {uri}")
+        art = qr_ascii(uri)
+        if art:
+            print("\n" + art)
+        else:
+            print("\n  (no QR shown - enter the 2FA key manually in your authenticator app,")
+            print("   or install `qrencode` to see a QR code here)")
+        print()
+
+    if cmd == "adduser":
+        if not USER_RE.match(name):
+            print("Username: 2-32 chars, lowercase letters, digits, . _ -")
+            return 2
+        if name in users:
+            print(f"User '{name}' already exists (use passwd / reset-2fa).")
+            return 1
+        pw, gen = pick_password()
+        secret = new_totp_secret()
+        users[name] = {"pw": hash_password(pw), "totp": secret, "created": datetime.now().isoformat(timespec="seconds")}
+        save_users(users)
+        show(pw, gen, secret)
+        return 0
+    if name not in users:
+        print(f"No such user: {name}")
+        return 1
+    if cmd == "passwd":
+        pw, gen = pick_password()
+        users[name]["pw"] = hash_password(pw)
+        save_users(users)
+        print(f"\n  New password for {name}: {pw}\n" if gen else f"\n  Password updated for {name}.\n")
+        return 0
+    if cmd == "reset-2fa":
+        users[name]["totp"] = new_totp_secret()
+        save_users(users)
+        show("", False, users[name]["totp"])
+        return 0
+    if cmd == "deluser":
+        if "--yes" not in argv and "-y" not in argv:
+            if input(f"Remove user '{name}'? They will be signed out and cannot log in again. [y/N]: ").strip().lower() != "y":
+                print("Cancelled.")
+                return 1
+        del users[name]
+        save_users(users)
+        print(f"Removed {name}.")
+        return 0
+    return 2
+
+_CLI_ALIASES = {"--remove-user": "deluser", "remove-user": "deluser", "removeuser": "deluser", "rmuser": "deluser"}
+CLI_COMMANDS = {"adduser", "passwd", "reset-2fa", "deluser", "users", "lan-mode"} | set(_CLI_ALIASES)
+
+
 # ── Backups ────────────────────────────────────────────────────────────────────
 
 SKIP_DIRS = {"logs", "crash-reports", "debug"}
 
-def do_backup(sid):
+def do_backup(sid, job=None):
     if sid not in servers:
         return False, "Server not found"
     srv     = servers[sid]
@@ -289,17 +940,51 @@ def do_backup(sid):
     fname   = f"{sid}-{ts}.zip"
     fpath   = os.path.join(bak_dir, fname)
     try:
+        todo = []
+        for root, dirs, files in os.walk(src):
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+            for name in files:
+                fp = os.path.join(root, name)
+                try:
+                    todo.append((fp, os.path.getsize(fp)))
+                except OSError:
+                    pass
+        if job:
+            job.unit, job.total, job.done = "bytes", sum(n for _, n in todo), 0
         with zipfile.ZipFile(fpath, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-            for root, dirs, files in os.walk(src):
-                dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-                for name in files:
-                    fp = os.path.join(root, name)
-                    zf.write(fp, os.path.relpath(fp, src))
+            for fp, size in todo:
+                zf.write(fp, os.path.relpath(fp, src))
+                if job:
+                    job.done += size
         size_mb = round(os.path.getsize(fpath) / 1024 / 1024, 2)
         srv._append(f"[CreeperCrest] Backup saved → {fpath}  ({size_mb} MB)")
+        _prune_backups(sid, bak_dir)
         return True, {"file": fname, "path": fpath, "size_mb": size_mb}
     except Exception as e:
         return False, str(e)
+
+def _prune_backups(sid, bak_dir):
+    limit = int(cfg.get("max_backups", 0) or 0)
+    if limit <= 0:
+        return
+    pat = re.compile(rf"^{re.escape(sid)}-\d{{8}}-\d{{6}}\.zip$")
+    mine = sorted(n for n in os.listdir(bak_dir) if pat.match(n))
+    for name in mine[:-limit]:
+        try:
+            os.remove(os.path.join(bak_dir, name))
+        except OSError:
+            pass
+
+_BACKUP_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,150}\.zip$")
+SID_RE     = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+
+def backup_path(fname):
+    """Absolute path of a backup zip, or None if the name is not a plain file name inside the backup dir."""
+    if not isinstance(fname, str) or not _BACKUP_RE.match(fname) or ".." in fname:
+        return None
+    bak_dir = os.path.realpath(os.path.expanduser(cfg.get("backup_dir", "~/mc-backups")))
+    path = os.path.realpath(os.path.join(bak_dir, fname))
+    return path if os.path.dirname(path) == bak_dir else None
 
 def list_backups():
     bak_dir = os.path.expanduser(cfg.get("backup_dir", "~/mc-backups"))
@@ -307,7 +992,7 @@ def list_backups():
         return []
     out = []
     for name in sorted(os.listdir(bak_dir), reverse=True):
-        if not name.endswith(".zip"):
+        if not _BACKUP_RE.match(name):
             continue
         fp = os.path.join(bak_dir, name)
         out.append({
@@ -317,21 +1002,20 @@ def list_backups():
         })
     return out
 
-def restore_backup(fname, sid):
+def restore_backup(fname, sid, job=None):
     if sid not in servers:
         return False, "Server not found"
     if servers[sid].is_running():
         return False, "Stop the server before restoring"
-    bak_dir = os.path.expanduser(cfg.get("backup_dir", "~/mc-backups"))
-    fpath   = os.path.join(bak_dir, fname)
-    if not fname.endswith(".zip") or not os.path.isfile(fpath):
+    fpath = backup_path(fname)
+    if not fpath or not os.path.isfile(fpath):
         return False, "Backup file not found"
     dest = os.path.expanduser(servers[sid].cfg.get("directory", ""))
     if not dest or not os.path.isdir(dest):
         return False, "Server directory not found"
     try:
         with zipfile.ZipFile(fpath, "r") as zf:
-            zf.extractall(dest)
+            _extract_zip(zf, dest, job)
         servers[sid]._append(f"[CreeperCrest] Restored from backup: {fname}")
         return True, f"Restored {fname}"
     except Exception as e:
@@ -446,6 +1130,7 @@ HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>CreeperCrest</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%233eae30'/%3E%3C/svg%3E">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 html{scrollbar-color:#30363d transparent}
@@ -456,7 +1141,7 @@ body{background:
   color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh;letter-spacing:.1px}
 a{color:#58a6ff;text-decoration:none}
 
-header{background:rgba(22,27,34,.85);backdrop-filter:blur(10px);position:sticky;top:0;z-index:50;
+header{background:rgba(22,27,34,.97);position:sticky;top:0;z-index:50;
   border-bottom:1px solid #21262d;padding:.85rem 2rem;display:flex;align-items:center;gap:1.1rem;
   box-shadow:0 1px 0 rgba(0,0,0,.4)}
 header h1{font-size:1.22rem;color:#f0f6fc;font-weight:700;display:flex;align-items:center;gap:.55rem}
@@ -544,14 +1229,29 @@ section+section{margin-top:2.2rem}
   border:1px dashed #30363d;border-radius:12px;background:rgba(255,255,255,.015)}
 
 /* ── Add server modal ── */
-.overlay{position:fixed;inset:0;background:rgba(1,4,9,.72);backdrop-filter:blur(2px);display:none;
+.overlay{position:fixed;inset:0;background:rgba(1,4,9,.78);display:none;
   align-items:center;justify-content:center;z-index:100}
 .overlay.open{display:flex}
+.usage-rows{display:contents}
 .modal{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:1.5rem;width:min(520px,94vw);
   box-shadow:0 12px 36px rgba(0,0,0,.5)}
-.spinner{width:32px;height:32px;border:3px solid #30363d;border-top-color:#58a6ff;
-  border-radius:50%;margin:0 auto;animation:cc-spin .8s linear infinite}
-@keyframes cc-spin{to{transform:rotate(360deg)}}
+.wz-modal{width:min(640px,94vw);max-height:92vh;overflow-y:auto}
+.wz-steps{display:flex;gap:.35rem;margin-bottom:1rem}
+.wz-steps span{flex:1;height:4px;border-radius:2px;background:#21262d}
+.wz-steps span.done{background:#1f6feb}
+.wz-help{font-size:.82rem;color:#7d8590;margin:-.6rem 0 1rem;line-height:1.45}
+.wz-pane{display:none}
+.wz-pane.show{display:block}
+.wz-eula{display:flex;align-items:center;gap:.5rem;font-size:.8rem;color:#c9d1d9;margin:.4rem 0 .8rem}
+.wz-eula a{color:#58a6ff}
+.wz-summary{font-size:.78rem;color:#7d8590;background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:.6rem .8rem;line-height:1.6;word-break:break-all}
+.wz-summary b{color:#c9d1d9;font-weight:600}
+.frow.chk label{display:flex;align-items:center;gap:.5rem;color:#c9d1d9;cursor:pointer;margin:0}
+.frow.chk input{width:auto}
+.dp-list{max-height:320px;overflow-y:auto;border:1px solid #21262d;border-radius:8px;background:#0d1117}
+.dp-item{padding:.45rem .8rem;font-size:.83rem;color:#79c0ff;cursor:pointer;border-bottom:1px solid #161b22}
+.dp-item:hover{background:#1c2128}
+.dp-empty{padding:1rem;text-align:center;color:#7d8590;font-size:.83rem}
 .modal h3{margin-bottom:1.1rem;color:#f0f6fc;font-size:1rem}
 .frow{margin-bottom:.7rem}
 .frow label{display:block;font-size:.78rem;color:#7d8590;margin-bottom:.3rem}
@@ -673,6 +1373,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
     <span>s</span>
   </div>
   <span id="upd">connecting…</span>
+  <span style="font-size:.73rem;color:#7d8590;white-space:nowrap">__ACCT__</span>
 </header>
 <main>
   <!-- Servers page -->
@@ -702,7 +1403,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
         <h2>Servers</h2>
         <div style="display:flex;gap:.5rem">
           <button class="btn bg-gray" onclick="openImport()">Import Server (ZIP)</button>
-          <button class="btn bg-blue" onclick="openAdd()">+ Add Server</button>
+          <button class="btn bg-blue" onclick="openWizard()">+ Add Server</button>
         </div>
       </div>
       <div class="grid" id="grid"><div class="empty">No servers configured yet.</div></div>
@@ -755,10 +1456,120 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
       <div class="frow"><label>Min RAM (MB)</label><input id="f-min" type="number" value="512" min="256" step="256"/></div>
       <div class="frow"><label>Max RAM (MB)</label><input id="f-max" type="number" value="2048" min="256" step="256"/></div>
     </div>
-    <div class="frow"><label>Extra JVM args</label><input id="f-args" value="-XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:MaxGCPauseMillis=200"/></div>
+    <div class="frow"><label>Extra JVM args</label><input id="f-args" value="__JVM_ARGS__"/></div>
+    <div class="frow-2">
+      <div class="frow"><label>Resource pack URL (optional)</label><input id="f-rp" placeholder="https://example.com/pack.zip"/></div>
+      <div class="frow"><label>Resource pack SHA-1 (optional)</label><input id="f-rp-sha1" placeholder="40 hex chars"/></div>
+    </div>
+    <div class="frow"><label>Resource pack prompt shown to players (optional)</label><input id="f-rp-prompt" maxlength="256"/></div>
+    <div class="frow chk"><label><input type="checkbox" id="f-rp-req"/> Require the resource pack (players who decline are kicked)</label></div>
+    <div class="frow" id="f-rp-actions" style="display:none">
+      <label>Resource pack - Download/Upload hosts it on CreeperCrest and fills in the SHA-1 for you</label>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <button class="btn bg-blue" type="button" onclick="rpFetch()">&#8681; Download from URL</button>
+        <div class="upload-btn">
+          <button class="btn bg-teal" type="button">&#8679; Upload ZIP</button>
+          <input type="file" id="f-rp-file" accept=".zip" onchange="rpUpload()"/>
+        </div>
+      </div>
+    </div>
     <div class="modal-btns">
       <button class="btn bg-gray" onclick="closeAdd()">Cancel</button>
       <button class="btn bg-green" id="modal-submit-btn" onclick="submitModal()">Add Server</button>
+    </div>
+  </div>
+</div>
+
+<!-- Create server wizard -->
+<div class="overlay" id="wz-overlay">
+  <div class="modal wz-modal">
+    <div class="wz-steps" id="wz-steps"></div>
+    <h3 id="wz-title"></h3>
+    <p class="wz-help" id="wz-help"></p>
+
+    <div class="wz-pane" data-step="0">
+      <div class="frow"><label>Server name *</label><input id="wz-name" placeholder="Survival SMP" oninput="wzName()"/></div>
+      <div class="frow"><label>ID (letters, numbers, dash)</label><input id="wz-id" placeholder="survival-smp" oninput="_wzIdTouched=true"/></div>
+      <div class="frow"><label>MOTD (shown in the player's server list)</label><input id="wz-p-motd" value="A Minecraft Server" maxlength="200"/></div>
+    </div>
+
+    <div class="wz-pane" data-step="1">
+      <div class="frow"><label>Server folder *</label>
+        <div style="display:flex;gap:.5rem">
+          <input id="wz-dir" placeholder="/home/crafty/servers/survival"/>
+          <button class="btn bg-teal" type="button" onclick="dpOpen()">&#128193; Browse</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="wz-pane" data-step="2">
+      <div class="frow-2">
+        <div class="frow"><label>Server software</label>
+          <select id="wz-jtype" onchange="wzLoadVersions()">
+            <option value="paper">Paper (recommended)</option>
+            <option value="vanilla">Vanilla</option>
+            <option value="purpur">Purpur</option>
+            <option value="fabric">Fabric</option>
+            <option value="">I already have a JAR</option>
+          </select>
+        </div>
+        <div class="frow"><label>Minecraft version</label>
+          <select id="wz-jver" disabled onchange="wzJavaCheck()"><option value="">-</option></select>
+        </div>
+      </div>
+      <div class="frow" id="wz-upload-wrap" style="display:none">
+        <label>Upload your server JAR (optional - skip it if the JAR is already in the folder)</label>
+        <div class="upload-btn" style="width:100%">
+          <button class="btn bg-teal" type="button" style="width:100%;text-align:left" id="wz-jar-label">&#8679; Choose JAR file...</button>
+          <input type="file" id="wz-jar-file" accept=".jar" onchange="wzJarChosen(this)"/>
+        </div>
+      </div>
+      <div class="frow"><label>JAR filename</label><input id="wz-jar" value="server.jar"/></div>
+      <p id="wz-java-warn" style="display:none;font-size:.8rem;color:#e3b341;background:#2a2108;border:1px solid #9e6a03;border-radius:8px;padding:.5rem .7rem;margin-top:.4rem"></p>
+    </div>
+
+    <div class="wz-pane" data-step="3">
+      <div class="frow-2" id="wz-props"></div>
+    </div>
+
+    <div class="wz-pane" data-step="4">
+      <div class="frow-2">
+        <div class="frow"><label>Min RAM (MB)</label><input id="wz-min" type="number" value="512" min="256" step="256"/></div>
+        <div class="frow"><label>Max RAM (MB)</label><input id="wz-max" type="number" value="2048" min="256" step="256"/></div>
+      </div>
+      <div class="frow"><label>Java arguments</label><input id="wz-args"/></div>
+      <div class="frow-2">
+        <div class="frow"><label>Resource pack URL (optional)</label><input id="wz-rp" placeholder="https://example.com/pack.zip"/></div>
+        <div class="frow"><label>Resource pack SHA-1 (optional)</label><input id="wz-rp-sha1"/></div>
+      </div>
+      <div class="frow"><label>Resource pack prompt shown to players (optional)</label><input id="wz-rp-prompt" maxlength="256"/></div>
+      <div class="frow chk"><label><input type="checkbox" id="wz-rp-req"/> Require the resource pack (players who decline are kicked)</label></div>
+      <label class="wz-eula"><input type="checkbox" id="wz-eula"/> I accept the
+        <a href="https://aka.ms/MinecraftEULA" target="_blank" rel="noopener">Minecraft EULA</a> (required to run a server)</label>
+      <div class="wz-summary" id="wz-summary"></div>
+    </div>
+
+    <div class="modal-btns">
+      <button class="btn bg-gray" onclick="wzClose()">Cancel</button>
+      <button class="btn bg-gray" id="wz-back" onclick="wzGo(-1)">Back</button>
+      <button class="btn bg-blue" id="wz-next" onclick="wzGo(1)">Next</button>
+      <button class="btn bg-green" id="wz-create" onclick="wzCreate()">Create Server</button>
+    </div>
+  </div>
+</div>
+
+<!-- Folder picker -->
+<div class="overlay" id="dp-overlay" style="z-index:300">
+  <div class="modal" style="width:min(560px,94vw)">
+    <h3>Choose a folder</h3>
+    <div class="breadcrumb" id="dp-path" style="margin-bottom:.6rem;word-break:break-all"></div>
+    <div id="dp-list" class="dp-list"></div>
+    <div class="modal-btns" style="justify-content:space-between">
+      <button class="btn bg-gray" onclick="dpNew()">&#10133; New folder</button>
+      <span style="display:flex;gap:.5rem">
+        <button class="btn bg-gray" onclick="dpClose()">Cancel</button>
+        <button class="btn bg-green" onclick="dpSelect()">Select this folder</button>
+      </span>
     </div>
   </div>
 </div>
@@ -784,7 +1595,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
       <div class="frow"><label>Min RAM (MB)</label><input id="fi-min" type="number" value="512" min="256" step="256"/></div>
       <div class="frow"><label>Max RAM (MB)</label><input id="fi-max" type="number" value="2048" min="256" step="256"/></div>
     </div>
-    <div class="frow"><label>Extra JVM args</label><input id="fi-args" value="-XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:MaxGCPauseMillis=200"/></div>
+    <div class="frow"><label>Extra JVM args</label><input id="fi-args" value="__JVM_ARGS__"/></div>
     <div id="import-prog" style="display:none;margin-bottom:.7rem">
       <div style="display:flex;align-items:center;gap:.7rem">
         <span id="import-prog-label" style="font-size:.78rem;color:#c9d1d9;white-space:nowrap;min-width:130px">Uploading…</span>
@@ -830,7 +1641,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
       <div class="frow"><label>Min RAM (MB)</label><input id="cfb-min" type="number" value="512" min="256" step="256"/></div>
       <div class="frow"><label>Max RAM (MB)</label><input id="cfb-max" type="number" value="2048" min="256" step="256"/></div>
     </div>
-    <div class="frow"><label>Extra JVM args</label><input id="cfb-args" value="-XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:MaxGCPauseMillis=200"/></div>
+    <div class="frow"><label>Extra JVM args</label><input id="cfb-args" value="__JVM_ARGS__"/></div>
     <div class="modal-btns">
       <button class="btn bg-gray" onclick="closeCreateFromBackup()">Cancel</button>
       <button class="btn bg-green" onclick="submitCreateFromBackup()">Create Server</button>
@@ -841,8 +1652,9 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
 <!-- Busy / progress overlay -->
 <div class="overlay" id="busy-overlay" style="z-index:400">
   <div class="modal" style="width:min(360px,90vw);text-align:center;padding:2rem 1.6rem">
-    <div class="spinner"></div>
-    <p id="busy-label" style="margin-top:1.1rem;color:#c9d1d9;font-size:.87rem">Working...</p>
+    <p id="busy-label" style="color:#c9d1d9;font-size:.87rem">Working...</p>
+    <div class="fb-prog-track" style="margin-top:1rem"><div class="fb-prog-fill indet" id="busy-fill"></div></div>
+    <p id="busy-val" style="margin-top:.5rem;color:#7d8590;font-size:.76rem;min-height:1em"></p>
   </div>
 </div>
 
@@ -874,6 +1686,9 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
         </div>
       </div>
     </div>
+    <div class="frow"><label>Max backups kept per server (0 = unlimited, otherwise 3-28)</label>
+      <input id="ab-max" type="number" min="0" max="28" value="0" style="width:100px" onchange="clampMaxBackups(this)"/>
+    </div>
     <div class="modal-btns">
       <button class="btn bg-gray" onclick="closeAutoBackup()">Cancel</button>
       <button class="btn bg-green" onclick="submitAutoBackup()">Save Schedule</button>
@@ -895,6 +1710,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
         <button class="btn bg-teal">&#8679; Upload</button>
         <input type="file" id="fb-upload" multiple onchange="doUpload()"/>
       </div>
+      <button class="btn bg-gray" id="fb-up" onclick="fbUp()" disabled>&#8592; Back</button>
       <button class="btn bg-gray" onclick="newFolder()">&#128193; New Folder</button>
       <button class="btn bg-blue"   onclick="dlSelected()">&#8681; Download</button>
       <button class="btn bg-yellow" onclick="dlZip()">&#128230; Download ZIP</button>
@@ -1011,7 +1827,7 @@ function renderScheduleDisplay(ab) {
 // ── Utilities ──────────────────────────────────────────────────────────────────
 
 function esc(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 function flash(msg, err) {
@@ -1022,17 +1838,46 @@ function flash(msg, err) {
   el._t = setTimeout(() => el.classList.remove('show'), 3500);
 }
 
+const CSRF = '__CSRF__';
+
+// Associate every <label> with its field so Chrome/Brave DevTools does not log a form issue per label.
+let _lblN = 0;
+function fixLabels(root) {
+  (root || document).querySelectorAll('label:not([for])').forEach(l => {
+    if (l.querySelector('input,select,textarea')) return;
+    const holder = l.closest('.frow, .ram-row, .sys-col, div') || l.parentElement;
+    const f = holder && holder.querySelector('input,select,textarea');
+    if (!f) return;
+    if (!f.id) f.id = 'auto-f' + (++_lblN);
+    l.htmlFor = f.id;
+  });
+}
+
+async function logout() {
+  await api('POST', '/logout', {});
+  location.href = '/login';
+}
+
 async function api(method, path, body) {
-  const opts = { method, headers: {} };
+  const opts = { method, headers: {'X-CC-CSRF': CSRF} };
   if (body !== undefined) {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(body);
   }
   const r = await fetch(path, opts);
+  if (r.status === 401) { location.href = '/login'; return {error: 'login required'}; }
   return r.json();
 }
 
 // ── Server cards ───────────────────────────────────────────────────────────────
+
+function usageRowsHTML(s) {
+  return `
+${(()=>{if(s.cpu_pct===null)return '<div class="usage-row"><span class="usage-label">CPU</span><div class="usage-bar"></div><span class="usage-val" style="color:#484f58">-</span></div>';const pct=Math.min(s.cpu_pct,100);return '<div class="usage-row"><span class="usage-label">CPU</span><div class="usage-bar"><div class="usage-fill cpu-fill" style="width:'+pct+'%"></div></div><span class="usage-val">'+s.cpu_pct.toFixed(1)+'%</span></div>';})()}
+      ${(()=>{if(s.ram_mb===null)return '<div class="usage-row"><span class="usage-label">RAM</span><div class="usage-bar"></div><span class="usage-val" style="color:#484f58">-</span></div>';const pct=Math.min(s.memory_max_mb?Math.round(s.ram_mb/s.memory_max_mb*100):0,100);const cls=pct>=90?'crit':pct>=75?'hi':'';return '<div class="usage-row"><span class="usage-label">RAM</span><div class="usage-bar"><div class="usage-fill ram-fill '+cls+'" style="width:'+pct+'%"></div></div><span class="usage-val">'+s.ram_mb+' / '+s.memory_max_mb+' MB</span></div>';})()}
+      ${(()=>{if(s.heap_used_mb===null)return '<div class="usage-row"><span class="usage-label">Heap</span><div class="usage-bar"></div><span class="usage-val" style="color:#484f58">-</span></div>';const pct=Math.min(s.heap_total_mb?Math.round(s.heap_used_mb/s.heap_total_mb*100):0,100);const cls=pct>=90?'crit':pct>=75?'hi':'';return '<div class="usage-row"><span class="usage-label">Heap</span><div class="usage-bar"><div class="usage-fill heap-fill '+cls+'" style="width:'+pct+'%"></div></div><span class="usage-val">'+s.heap_used_mb+' / '+s.heap_total_mb+' MB</span></div>';})()}
+`;
+}
 
 function cardHTML(s) {
   const run = s.running;
@@ -1041,7 +1886,7 @@ function cardHTML(s) {
   <div class="card-main">
     <div class="card-top">
       <span class="card-name">${esc(s.name)}</span>
-      <span class="badge ${run?'on':'off'}">${run?'&#9679; RUNNING':'&#9675; STOPPED'}</span>
+      <span class="badge ${run?'on':'off'}">${run?'RUNNING':'STOPPED'}</span>
     </div>
     <div class="info">
       <b>Dir</b> ${esc(s.directory)}&nbsp;&nbsp;<b>JAR</b> ${esc(s.jar)}${s.pid?`&nbsp;&nbsp;<b>PID</b> ${s.pid}`:''}
@@ -1067,9 +1912,7 @@ function cardHTML(s) {
       <button class="btn bg-danger btn-full" onclick="delServer('${s.id}')">Remove</button>
     </div>
     <div class="usage-bars">
-      ${(()=>{if(s.cpu_pct===null)return '<div class="usage-row"><span class="usage-label">CPU</span><div class="usage-bar"></div><span class="usage-val" style="color:#484f58">-</span></div>';const pct=Math.min(s.cpu_pct,100);return '<div class="usage-row"><span class="usage-label">CPU</span><div class="usage-bar"><div class="usage-fill cpu-fill" style="width:'+pct+'%"></div></div><span class="usage-val">'+s.cpu_pct.toFixed(1)+'%</span></div>';})()}
-      ${(()=>{if(s.ram_mb===null)return '<div class="usage-row"><span class="usage-label">RAM</span><div class="usage-bar"></div><span class="usage-val" style="color:#484f58">-</span></div>';const pct=Math.min(s.memory_max_mb?Math.round(s.ram_mb/s.memory_max_mb*100):0,100);const cls=pct>=90?'crit':pct>=75?'hi':'';return '<div class="usage-row"><span class="usage-label">RAM</span><div class="usage-bar"><div class="usage-fill ram-fill '+cls+'" style="width:'+pct+'%"></div></div><span class="usage-val">'+s.ram_mb+' / '+s.memory_max_mb+' MB</span></div>';})()}
-      ${(()=>{if(s.heap_used_mb===null)return '<div class="usage-row"><span class="usage-label">Heap</span><div class="usage-bar"></div><span class="usage-val" style="color:#484f58">-</span></div>';const pct=Math.min(s.heap_total_mb?Math.round(s.heap_used_mb/s.heap_total_mb*100):0,100);const cls=pct>=90?'crit':pct>=75?'hi':'';return '<div class="usage-row"><span class="usage-label">Heap</span><div class="usage-bar"><div class="usage-fill heap-fill '+cls+'" style="width:'+pct+'%"></div></div><span class="usage-val">'+s.heap_used_mb+' / '+s.heap_total_mb+' MB</span></div>';})()}
+      <div class="usage-rows" id="ur-${s.id}">${usageRowsHTML(s)}</div>
       <div class="heap-graph"><svg id="hg-${s.id}" viewBox="0 0 300 64" preserveAspectRatio="none"></svg><div class="heap-legend"><span><i class="hl-young"></i>Young GC</span><span><i class="hl-full"></i>Full GC</span></div></div>
     </div>
   </div>
@@ -1084,15 +1927,46 @@ function cardHTML(s) {
 </div>`;
 }
 
+// Update cards in place: rebuild a card only when something other than live usage figures changed,
+// so the console, typed input and scroll position survive a refresh and the browser does far less layout work.
+const _cardSig = {};
+const cardSig = s => [s.name, s.running, s.pid, s.directory, s.jar, s.autostart, s.memory_min_mb, s.memory_max_mb].join('|');
+
 function renderServers(list) {
   const grid = document.getElementById('grid');
-  if (!list.length) { grid.innerHTML = '<div class="empty">No servers configured yet.</div>'; return; }
-  grid.innerHTML = list.map(cardHTML).join('');
+  if (!list.length) {
+    grid.innerHTML = '<div class="empty">No servers configured yet.</div>';
+    grid.dataset.ids = '';
+    return;
+  }
+  const ids = list.map(s => s.id).join(',');
+  if (grid.dataset.ids !== ids) {
+    grid.innerHTML = list.map(cardHTML).join('');
+    grid.dataset.ids = ids;
+    for (const s of list) { _cardSig[s.id] = cardSig(s); _logSeq[s.id] = 0; }
+    fixLabels(grid);
+    return;
+  }
+  for (const s of list) {
+    const sig = cardSig(s);
+    if (_cardSig[s.id] !== sig) {
+      const el = document.getElementById('card-' + s.id);
+      if (el) { el.outerHTML = cardHTML(s); _logSeq[s.id] = 0; fixLabels(document.getElementById('card-' + s.id)); }
+      _cardSig[s.id] = sig;
+    } else {
+      const ur = document.getElementById('ur-' + s.id);
+      if (ur) ur.innerHTML = usageRowsHTML(s);
+    }
+  }
 }
 
 const bakSel = new Set();
 
+let _bakSig = '';
 function renderBackups(list) {
+  const sig = JSON.stringify(list);
+  if (sig === _bakSig) return;
+  _bakSig = sig;
   const el = document.getElementById('blist');
   if (!list.length) {
     el.innerHTML = '<div class="empty">No backups yet.</div>';
@@ -1167,7 +2041,11 @@ function renderSysinfo(sys) {
     ? sys.disk_used_gb + ' / ' + sys.disk_total_gb + ' GB' : '-';
 }
 
+let _refreshing = false;
+
 async function refresh() {
+  if (_refreshing) return;
+  _refreshing = true;
   try {
     const d = await api('GET', '/api/status');
     _servers = d.servers || [];
@@ -1175,12 +2053,15 @@ async function refresh() {
     renderBackups(d.backups || []);
     if (d.backup_dir)  document.getElementById('bak-dir').textContent = d.backup_dir;
     if (d.sysinfo)     renderSysinfo(d.sysinfo);
+    if (d.max_backups !== undefined) _maxBackups = d.max_backups;
     if (d.auto_backup) { _autoBackupCfg = d.auto_backup; renderScheduleDisplay(d.auto_backup); }
     document.getElementById('upd').textContent = 'Updated ' + new Date().toLocaleTimeString();
     fetchAllLogs(d.servers || []);
     updateAllHeapGraphs(d.servers || []);
   } catch {
     document.getElementById('upd').textContent = 'Connection lost';
+  } finally {
+    _refreshing = false;
   }
 }
 
@@ -1195,10 +2076,17 @@ async function act(sid, action) {
 
 async function doBackup(sid, btn) {
   btn.disabled = true; btn.textContent = 'Backing up…';
-  const r = await api('POST', `/api/${sid}/backup`);
-  btn.disabled = false; btn.innerHTML = '&#128190; Backup';
-  if (r.ok) flash(`Backup: ${r.result.file}  (${r.result.size_mb} MB)`);
-  else flash('Backup failed: ' + r.result, true);
+  try {
+    const r = await api('POST', `/api/${sid}/backup`);
+    if (!r.job) throw new Error(r.error || 'failed');
+    const res = await runJob(r.job, 'Creating backup...');
+    flash(`Backup: ${res.file}  (${res.size_mb} MB)`);
+  } catch (e) {
+    flash('Backup failed: ' + e.message, true);
+  } finally {
+    busyHide();
+    btn.disabled = false; btn.innerHTML = '&#128190; Backup';
+  }
   refresh();
 }
 
@@ -1222,13 +2110,23 @@ async function sendCmd(sid) {
   fetchLogs(sid);
 }
 
+const _logSeq = {};
+
 async function fetchLogs(sid) {
   const el = document.getElementById(`con-${sid}`);
   if (!el) return;
-  const r = await api('GET', `/api/${sid}/logs`);
+  const r = await api('GET', `/api/${sid}/logs?since=${_logSeq[sid] || 0}`);
   if (!r.logs) return;
-  el.innerHTML = r.logs.map(l => `<p>${esc(l)}</p>`).join('');
-  el.scrollTop = el.scrollHeight;
+  _logSeq[sid] = r.seq;
+  if (!r.full && !r.logs.length) return;          // nothing new: leave the DOM alone
+  const stick = r.full || el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  const html = r.logs.map(l => `<p>${esc(l)}</p>`).join('');
+  if (r.full) el.innerHTML = html;
+  else {
+    el.insertAdjacentHTML('beforeend', html);
+    while (el.childElementCount > 300) el.firstElementChild.remove();
+  }
+  if (stick) el.scrollTop = el.scrollHeight;
 }
 
 function fetchAllLogs(list) {
@@ -1253,24 +2151,262 @@ async function delServer(sid) {
   refresh();
 }
 
+// ── Create server wizard ───────────────────────────────────────────────────────
+
+const DEFAULT_JVM_ARGS = '__JVM_ARGS__';
+
+const WZ_STEPS = [
+  ['Name your server', 'Pick a display name and the message players see under the server name in their multiplayer list (MOTD).'],
+  ['Choose where it lives', 'Pick the folder that will hold the server files and world. Use Browse to navigate and create a folder.'],
+  ['Choose the server software', 'CreeperCrest downloads the server JAR for you. Paper is a good default for most servers; choose "I already have a JAR" to use one you placed in the folder yourself.'],
+  ['World and gameplay', 'These are written to server.properties. The defaults match a normal survival server; seed and world type only matter when the world is first created.'],
+  ['Resources and finish', 'Memory and Java arguments are pre-filled with tuned defaults. Review the summary, accept the EULA and create the server.'],
+];
+
+const WZ_PROPS = [
+  {k:'level-name', l:'World folder name', t:'text', d:'world'},
+  {k:'level-seed', l:'World seed (blank = random)', t:'text', d:''},
+  {k:'level-type', l:'World type', t:'sel', d:'normal', o:[['normal','Default'],['flat','Superflat'],['large_biomes','Large biomes'],['amplified','Amplified']]},
+  {k:'gamemode', l:'Default game mode', t:'sel', d:'survival', o:[['survival','Survival'],['creative','Creative'],['adventure','Adventure'],['spectator','Spectator']]},
+  {k:'difficulty', l:'Difficulty', t:'sel', d:'easy', o:[['peaceful','Peaceful'],['easy','Easy'],['normal','Normal'],['hard','Hard']]},
+  {k:'max-players', l:'Max players', t:'num', d:20, min:1, max:1000},
+  {k:'server-port', l:'Server port', t:'num', d:25565, min:1024, max:65535},
+  {k:'view-distance', l:'View distance (chunks)', t:'num', d:10, min:2, max:32},
+  {k:'simulation-distance', l:'Simulation distance (chunks)', t:'num', d:10, min:3, max:32},
+  {k:'spawn-protection', l:'Spawn protection (blocks)', t:'num', d:16, min:0, max:1000},
+  {k:'online-mode', l:'Online mode (verify accounts with Mojang)', t:'bool', d:true},
+  {k:'pvp', l:'Player vs player', t:'bool', d:true},
+  {k:'hardcore', l:'Hardcore', t:'bool', d:false},
+  {k:'white-list', l:'Whitelist', t:'bool', d:false},
+  {k:'allow-nether', l:'Allow the Nether', t:'bool', d:true},
+  {k:'allow-flight', l:'Allow flight', t:'bool', d:false},
+  {k:'enable-command-block', l:'Command blocks', t:'bool', d:false},
+];
+
+let _wzStep = 0, _wzIdTouched = false, _wzHome = '';
+
+function wzProps() {
+  document.getElementById('wz-props').innerHTML = WZ_PROPS.map(p => {
+    const id = 'wz-p-' + p.k;
+    if (p.t === 'bool') return `<div class="frow chk"><label><input type="checkbox" id="${id}" ${p.d ? 'checked' : ''}/> ${esc(p.l)}</label></div>`;
+    if (p.t === 'sel')  return `<div class="frow"><label>${esc(p.l)}</label><select id="${id}">${p.o.map(o => `<option value="${o[0]}" ${o[0] === p.d ? 'selected' : ''}>${esc(o[1])}</option>`).join('')}</select></div>`;
+    if (p.t === 'num')  return `<div class="frow"><label>${esc(p.l)}</label><input id="${id}" type="number" min="${p.min}" max="${p.max}" value="${p.d}"/></div>`;
+    return `<div class="frow"><label>${esc(p.l)}</label><input id="${id}" value="${esc(p.d)}"/></div>`;
+  }).join('');
+  fixLabels(document.getElementById('wz-props'));
+}
+
+async function openWizard() {
+  _wzStep = 0; _wzIdTouched = false;
+  wzProps();
+  const set = (id, v) => document.getElementById(id).value = v;
+  set('wz-name', ''); set('wz-id', ''); set('wz-p-motd', 'A Minecraft Server'); set('wz-dir', '');
+  set('wz-jar', 'server.jar'); set('wz-min', '512'); set('wz-max', '2048'); set('wz-args', DEFAULT_JVM_ARGS);
+  set('wz-rp', ''); set('wz-rp-sha1', ''); set('wz-rp-prompt', ''); set('wz-jtype', 'paper');
+  document.getElementById('wz-rp-req').checked = false;
+  document.getElementById('wz-jar-file').value = '';
+  document.getElementById('wz-jar-label').innerHTML = '&#8679; Choose JAR file...';
+  document.getElementById('wz-eula').checked = false;
+  // spread default ports so a second server does not collide with the first
+  document.getElementById('wz-p-server-port').value = 25565 + (_servers ? _servers.length : 0);
+  wzLoadVersions();
+  document.getElementById('wz-overlay').classList.add('open');
+  wzRender();
+  const r = await api('GET', '/api/browse?path=~');
+  if (r.home) _wzHome = r.home;
+}
+
+function wzClose() { document.getElementById('wz-overlay').classList.remove('open'); }
+
+function wzSlug(v) { return v.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''); }
+
+function wzName() {
+  if (_wzIdTouched) return;
+  document.getElementById('wz-id').value = wzSlug(document.getElementById('wz-name').value);
+}
+
+async function wzLoadVersions() {
+  const t = document.getElementById('wz-jtype').value, sel = document.getElementById('wz-jver');
+  sel.innerHTML = '<option value="">-</option>'; sel.disabled = true;
+  document.getElementById('wz-upload-wrap').style.display = t ? 'none' : '';
+  if (!t) return;
+  sel.innerHTML = '<option value="">Loading...</option>';
+  const r = await api('GET', '/api/jar_versions?type=' + t);
+  if (r.error) { sel.innerHTML = '<option value="">-</option>'; flash(r.error, true); return; }
+  sel.innerHTML = r.versions.map(v => `<option>${esc(v)}</option>`).join('');
+  sel.disabled = false;
+  wzJavaCheck();
+}
+
+async function wzJavaCheck() {
+  const warn = document.getElementById('wz-java-warn');
+  const ver = document.getElementById('wz-jver').value;
+  warn.style.display = 'none';
+  if (!ver || !document.getElementById('wz-jtype').value) return;
+  const r = await api('GET', '/api/java?version=' + encodeURIComponent(ver));
+  if (document.getElementById('wz-jver').value !== ver) return;   // selection changed while waiting
+  if (!r.host) {
+    warn.textContent = 'Java was not found on this host - install OpenJDK' + (r.required ? ' ' + r.required + '+' : '') + ' before starting the server.';
+  } else if (r.required && r.host < r.required) {
+    warn.textContent = `Minecraft ${ver} needs Java ${r.required} or newer, but this host has Java ${r.host}. The server will not start until you upgrade Java.`;
+  } else return;
+  warn.style.display = 'block';
+}
+
+function wzJarChosen(input) {
+  const f = input.files[0];
+  if (!f) return;
+  if (!f.name.toLowerCase().endsWith('.jar')) { flash('Choose a .jar file', true); input.value = ''; return; }
+  document.getElementById('wz-jar').value = f.name;
+  document.getElementById('wz-jar-label').textContent = `${f.name} (${(f.size / 1048576).toFixed(1)} MB)`;
+}
+
+function wzUploadJar(sid, file) {
+  const form = new FormData();
+  form.append('files', file, file.name);
+  return xhrUpload(`/api/${sid}/upload?path=`, form, 'Uploading JAR...');
+}
+
+function wzRender() {
+  document.getElementById('wz-title').textContent = `Step ${_wzStep + 1} of ${WZ_STEPS.length}: ${WZ_STEPS[_wzStep][0]}`;
+  document.getElementById('wz-help').textContent  = WZ_STEPS[_wzStep][1];
+  document.getElementById('wz-steps').innerHTML   = WZ_STEPS.map((_, i) => `<span class="${i <= _wzStep ? 'done' : ''}"></span>`).join('');
+  document.querySelectorAll('.wz-pane').forEach(p => p.classList.toggle('show', +p.dataset.step === _wzStep));
+  document.getElementById('wz-back').style.display   = _wzStep ? '' : 'none';
+  document.getElementById('wz-next').style.display   = _wzStep < WZ_STEPS.length - 1 ? '' : 'none';
+  document.getElementById('wz-create').style.display = _wzStep === WZ_STEPS.length - 1 ? '' : 'none';
+  if (_wzStep === WZ_STEPS.length - 1) wzSummary();
+}
+
+function wzCheck(step) {
+  const v = id => document.getElementById(id).value.trim();
+  if (step === 0) {
+    if (!v('wz-name')) return 'Give your server a name';
+    if (!v('wz-id'))   return 'ID is required';
+  }
+  if (step === 1) {
+    if (!v('wz-dir')) return 'Choose a server folder';
+    if (!v('wz-dir').startsWith('/') && !v('wz-dir').startsWith('~')) return 'Use a full path, for example ' + (_wzHome || '/home/user') + '/servers/' + v('wz-id');
+  }
+  if (step === 2) {
+    if (!v('wz-jar')) return 'JAR filename is required';
+    if (document.getElementById('wz-jtype').value && !v('wz-jver')) return 'Pick a Minecraft version';
+  }
+  if (step === 3) {
+    for (const p of WZ_PROPS) {
+      if (p.t !== 'num') continue;
+      const n = parseInt(v('wz-p-' + p.k));
+      if (isNaN(n) || n < p.min || n > p.max) return `${p.l} must be between ${p.min} and ${p.max}`;
+    }
+    if (!v('wz-p-level-name')) return 'World folder name is required';
+  }
+  if (step === 4) {
+    if (parseInt(v('wz-min')) > parseInt(v('wz-max'))) return 'Max RAM must be at least Min RAM';
+    if (!document.getElementById('wz-eula').checked) return 'Accept the Minecraft EULA to continue';
+  }
+  return null;
+}
+
+function wzGo(d) {
+  if (d > 0) {
+    const err = wzCheck(_wzStep);
+    if (err) { flash(err, true); return; }
+  }
+  _wzStep = Math.max(0, Math.min(WZ_STEPS.length - 1, _wzStep + d));
+  if (_wzStep === 1 && !document.getElementById('wz-dir').value && _wzHome)
+    document.getElementById('wz-dir').value = _wzHome + '/servers/' + document.getElementById('wz-id').value.trim();
+  wzRender();
+}
+
+function wzSummary() {
+  const v = id => document.getElementById(id).value.trim();
+  const jt = document.getElementById('wz-jtype');
+  document.getElementById('wz-summary').innerHTML =
+    `<b>${esc(v('wz-name'))}</b> (${esc(v('wz-id'))})<br>` +
+    `Folder: <b>${esc(v('wz-dir'))}</b><br>` +
+    `Software: <b>${jt.value ? esc(jt.options[jt.selectedIndex].text.replace(' (recommended)', '')) + ' ' + esc(v('wz-jver')) : 'existing ' + esc(v('wz-jar'))}</b><br>` +
+    `Port <b>${esc(v('wz-p-server-port'))}</b>, ${esc(v('wz-p-gamemode'))}, ${esc(v('wz-p-difficulty'))}, ${esc(v('wz-p-max-players'))} players`;
+}
+
+async function wzCreate() {
+  for (let i = 0; i < WZ_STEPS.length; i++) {
+    const err = wzCheck(i);
+    if (err) { _wzStep = i; wzRender(); flash(err, true); return; }
+  }
+  const v = id => document.getElementById(id).value.trim();
+  const properties = {motd: v('wz-p-motd')};
+  for (const p of WZ_PROPS) {
+    const el = document.getElementById('wz-p-' + p.k);
+    properties[p.k] = p.t === 'bool' ? String(el.checked) : el.value.trim();
+  }
+  const body = {
+    id: v('wz-id'), name: v('wz-name'), directory: v('wz-dir'), jar: v('wz-jar'),
+    memory_min_mb: parseInt(v('wz-min')) || 512, memory_max_mb: parseInt(v('wz-max')) || 2048,
+    extra_args: v('wz-args'), jar_type: v('wz-jtype'), jar_version: v('wz-jver'),
+    resource_pack: v('wz-rp'), resource_pack_sha1: v('wz-rp-sha1'),
+    resource_pack_prompt: v('wz-rp-prompt'), resource_pack_required: document.getElementById('wz-rp-req').checked,
+    eula: true, properties,
+  };
+  busyShow('Creating server...');
+  try {
+    const r = await api('POST', '/api/add', body);
+    if (!r.ok) { flash(r.error || 'Failed to create server', true); return; }
+    if (r.job) await runJob(r.job, 'Downloading server JAR...');
+    const jf = document.getElementById('wz-jar-file').files[0];
+    if (!body.jar_type && jf) {
+      const u = await wzUploadJar(body.id, jf);
+      if (!u.ok) {
+        wzClose(); refresh();
+        flash(`Server created, but JAR upload failed (${u.error}) - upload it from the file browser`, true);
+        return;
+      }
+    }
+    wzClose();
+    flash(`Server "${body.name}" created`);
+    refresh();
+  } catch (e) { flash(e.message || 'Failed to create server', true); }
+  finally { busyHide(); }
+}
+
+// ── Folder picker ──────────────────────────────────────────────────────────────
+
+let _dpPath = '', _dpParent = null;
+
+function dpOpen() {
+  document.getElementById('dp-overlay').classList.add('open');
+  dpLoad(document.getElementById('wz-dir').value.trim() || '~');
+}
+function dpClose() { document.getElementById('dp-overlay').classList.remove('open'); }
+
+async function dpLoad(path) {
+  let r = await api('GET', '/api/browse?path=' + encodeURIComponent(path));
+  if (r.error) r = await api('GET', '/api/browse?path=~');   // typed path does not exist yet
+  if (r.error) { flash(r.error, true); return; }
+  _dpPath = r.path; _dpParent = r.parent;
+  document.getElementById('dp-path').textContent = r.path;
+  const rows = [];
+  if (r.parent) rows.push(`<div class="dp-item" data-p="${esc(r.parent)}">&#8593; ..</div>`);
+  r.dirs.forEach(n => rows.push(`<div class="dp-item" data-p="${esc((r.path.endsWith('/') ? r.path : r.path + '/') + n)}">&#128193; ${esc(n)}</div>`));
+  const list = document.getElementById('dp-list');
+  list.innerHTML = rows.join('') || '<div class="dp-empty">No sub-folders</div>';
+  list.querySelectorAll('.dp-item').forEach(el => el.onclick = () => dpLoad(el.dataset.p));
+}
+
+async function dpNew() {
+  const name = (prompt('New folder name:') || '').trim();
+  if (!name) return;
+  const r = await api('POST', '/api/browse_mkdir', {path: _dpPath, name});
+  if (r.ok) dpLoad(r.path); else flash(r.error, true);
+}
+
+function dpSelect() {
+  document.getElementById('wz-dir').value = _dpPath;
+  dpClose();
+}
+
 // ── Add / Edit server modal ────────────────────────────────────────────────────
 
 let _editSid = null;
-
-function openAdd() {
-  _editSid = null;
-  document.getElementById('modal-title').textContent = 'Add Server';
-  document.getElementById('modal-submit-btn').textContent = 'Add Server';
-  document.getElementById('f-id-wrap').style.display = '';
-  document.getElementById('f-id').value   = '';
-  document.getElementById('f-name').value = '';
-  document.getElementById('f-dir').value  = '';
-  document.getElementById('f-jar').value  = 'server.jar';
-  document.getElementById('f-min').value  = '512';
-  document.getElementById('f-max').value  = '2048';
-  document.getElementById('f-args').value = '-XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:MaxGCPauseMillis=200';
-  document.getElementById('add-overlay').classList.add('open');
-}
 
 function openEdit(sid) {
   const s = _servers.find(x => x.id === sid);
@@ -1285,33 +2421,48 @@ function openEdit(sid) {
   document.getElementById('f-min').value  = s.memory_min_mb;
   document.getElementById('f-max').value  = s.memory_max_mb;
   document.getElementById('f-args').value = s.extra_args || '';
+  document.getElementById('f-rp-actions').style.display = '';
+  document.getElementById('f-rp').value = s.resource_pack || '';
+  document.getElementById('f-rp-sha1').value = s.resource_pack_sha1 || '';
+  document.getElementById('f-rp-prompt').value = s.resource_pack_prompt || '';
+  document.getElementById('f-rp-req').checked = !!s.resource_pack_required;
   document.getElementById('add-overlay').classList.add('open');
+}
+
+function rpDone(r) {
+  if (r.ok && typeof r.msg === 'string') {
+    document.getElementById('f-rp').value = r.msg;
+    document.getElementById('f-rp-sha1').value = r.sha1 || '';
+    flash('Resource pack installed - restart the server to apply. Clients must be able to reach ' + r.msg);
+    refresh();
+  } else flash(r.error || 'Failed', true);
+}
+
+async function rpFetch() {
+  const url = document.getElementById('f-rp').value.trim();
+  if (!url) { flash('Enter the pack URL in the Resource pack URL field first', true); return; }
+  try {
+    const r = await api('POST', `/api/${_editSid}/rp_fetch`, {url});
+    if (!r.job) { flash(r.error || 'Failed', true); return; }
+    rpDone({ok: true, ...(await runJob(r.job, 'Downloading resource pack...'))});
+  } catch (e) { flash(e.message, true); }
+  finally { busyHide(); }
+}
+
+async function rpUpload() {
+  const input = document.getElementById('f-rp-file');
+  if (!input.files.length) return;
+  const form = new FormData();
+  form.append('file', input.files[0], input.files[0].name);
+  const r = await xhrUpload(`/api/${_editSid}/rp_upload`, form, 'Uploading resource pack...');
+  busyHide();
+  input.value = '';
+  rpDone(r);
 }
 
 function closeAdd() { document.getElementById('add-overlay').classList.remove('open'); }
 
-function submitModal() { _editSid ? submitEdit() : submitAdd(); }
-
-async function submitAdd() {
-  const g = id => document.getElementById(id).value.trim();
-  const body = {
-    id:            g('f-id'),
-    name:          g('f-name'),
-    directory:     g('f-dir'),
-    jar:           g('f-jar') || 'server.jar',
-    memory_min_mb: parseInt(g('f-min')) || 512,
-    memory_max_mb: parseInt(g('f-max')) || 2048,
-    extra_args:    g('f-args'),
-  };
-  if (!body.id)        { flash('ID is required', true); return; }
-  if (!body.directory) { flash('Directory is required', true); return; }
-  if (body.memory_min_mb > body.memory_max_mb) { flash('Max RAM must be ≥ Min RAM', true); return; }
-  const r = await api('POST', '/api/add', body);
-  if (!r.ok) { flash(r.error, true); return; }
-  closeAdd();
-  flash(`Server "${body.name || body.id}" added`);
-  refresh();
-}
+function submitModal() { submitEdit(); }
 
 async function submitEdit() {
   const g = id => document.getElementById(id).value.trim();
@@ -1323,6 +2474,10 @@ async function submitEdit() {
     memory_min_mb: parseInt(g('f-min')) || 512,
     memory_max_mb: parseInt(g('f-max')) || 2048,
     extra_args:    g('f-args'),
+    resource_pack:      g('f-rp'),
+    resource_pack_sha1: g('f-rp-sha1'),
+    resource_pack_prompt:   g('f-rp-prompt'),
+    resource_pack_required: document.getElementById('f-rp-req').checked,
   };
   if (!body.directory) { flash('Directory is required', true); return; }
   if (body.memory_min_mb > body.memory_max_mb) { flash('Max RAM must be ≥ Min RAM', true); return; }
@@ -1342,7 +2497,7 @@ function openImport() {
   document.getElementById('fi-jar').value  = 'server.jar';
   document.getElementById('fi-min').value  = '512';
   document.getElementById('fi-max').value  = '2048';
-  document.getElementById('fi-args').value = '-XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:MaxGCPauseMillis=200';
+  document.getElementById('fi-args').value = DEFAULT_JVM_ARGS;
   document.getElementById('import-file-label').textContent = '\\u2B06 Choose ZIP file\\u2026';
   document.getElementById('import-zip').value = '';
   document.getElementById('import-prog').style.display = 'none';
@@ -1401,22 +2556,22 @@ async function submitImport() {
       xhr.onload  = () => { try { resolve(JSON.parse(xhr.responseText)); } catch { reject(); } };
       xhr.onerror = () => reject();
       xhr.open('POST', '/api/import');
+      xhr.setRequestHeader('X-CC-CSRF', CSRF);
       xhr.send(form);
     });
-    lbl.textContent = 'Extracting\\u2026';
-    fill.style.width = '100%';
-    setTimeout(() => { prog.style.display = 'none'; btn.disabled = false; }, 400);
-    if (d.ok) {
-      closeImport();
-      flash('Server imported successfully');
-      refresh();
-    } else {
-      flash(d.error || 'Import failed', true);
-    }
-  } catch {
     prog.style.display = 'none';
     btn.disabled = false;
-    flash('Import failed', true);
+    if (!d.ok) { flash(d.error || 'Import failed', true); return; }
+    closeImport();
+    await runJob(d.job, 'Extracting server files...');
+    flash('Server imported successfully');
+    refresh();
+  } catch (e) {
+    prog.style.display = 'none';
+    btn.disabled = false;
+    flash(e && e.message ? e.message : 'Import failed', true);
+  } finally {
+    busyHide();
   }
 }
 
@@ -1432,6 +2587,11 @@ function openFB(sid) {
   loadDir('');
 }
 
+function fbUp() {
+  const i = fb.path.lastIndexOf('/');
+  loadDir(i < 0 ? '' : fb.path.slice(0, i));
+}
+
 function closeFB() {
   document.getElementById('fb-overlay').classList.remove('open');
 }
@@ -1439,6 +2599,7 @@ function closeFB() {
 async function loadDir(path) {
   fb.path = path;
   fb.sel  = new Set();
+  document.getElementById('fb-up').disabled = !path;
   document.getElementById('fb-selall').checked = false;
   updateSelInfo();
   const r = await api('GET', `/api/${fb.sid}/files?path=${encodeURIComponent(path)}`);
@@ -1454,12 +2615,11 @@ async function loadDir(path) {
 function renderCrumb(path) {
   const crumb = document.getElementById('fb-crumb');
   const parts = path ? path.split('/').filter(Boolean) : [];
-  let html = `<span onclick="loadDir('')">&#127968; root</span>`;
+  let html = `<span data-path="">&#127968; root</span>`;
   let acc  = '';
   for (const p of parts) {
     acc += (acc ? '/' : '') + p;
-    const cur = acc;
-    html += `<span class="sep">/</span><span onclick="loadDir('${esc(cur)}')">${esc(p)}</span>`;
+    html += `<span class="sep">/</span><span data-path="${esc(acc)}">${esc(p)}</span>`;
   }
   crumb.innerHTML = html;
 }
@@ -1473,17 +2633,28 @@ function renderRows(entries) {
   tbody.innerHTML = entries.map(e => {
     const icon = e.type === 'dir' ? '&#128193;' : fileIcon(e.name);
     const namePath = fb.path ? fb.path + '/' + e.name : e.name;
-    const clickFn  = e.type === 'dir'
-      ? `loadDir('${esc(namePath)}')`
-      : `dlFile('${esc(namePath)}')`;
     return `<tr class="${e.type}">
-  <td><input type="checkbox" data-name="${esc(e.name)}" onchange="toggleSel('${esc(e.name)}')"></td>
-  <td>${icon} <span class="fn" onclick="${clickFn}">${esc(e.name)}</span></td>
+  <td><input type="checkbox" data-name="${esc(e.name)}"></td>
+  <td>${icon} <span class="fn" data-kind="${e.type}" data-path="${esc(namePath)}">${esc(e.name)}</span></td>
   <td class="fsize">${e.type === 'dir' ? '-' : e.size}</td>
   <td class="fdate">${e.modified}</td>
 </tr>`;
   }).join('');
 }
+
+// File names come from the server's disk, so they are never placed in inline JS: handlers read data-* attributes.
+document.getElementById('fb-crumb').addEventListener('click', ev => {
+  const t = ev.target.closest('[data-path]');
+  if (t) loadDir(t.dataset.path);
+});
+document.getElementById('fb-rows').addEventListener('click', ev => {
+  const t = ev.target.closest('.fn');
+  if (!t) return;
+  if (t.dataset.kind === 'dir') loadDir(t.dataset.path); else dlFile(t.dataset.path);
+});
+document.getElementById('fb-rows').addEventListener('change', ev => {
+  if (ev.target.matches('input[type=checkbox]')) toggleSel(ev.target.dataset.name);
+});
 
 function fileIcon(name) {
   const ext = name.split('.').pop().toLowerCase();
@@ -1559,7 +2730,7 @@ async function dlZip() {
   try {
     const r = await fetch(`/api/${fb.sid}/zip`, {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: {'Content-Type': 'application/json', 'X-CC-CSRF': CSRF},
       body: JSON.stringify({files: names}),
     });
     if (!r.ok) { fbProgHide(); flash('ZIP failed', true); return; }
@@ -1597,6 +2768,7 @@ async function doUpload() {
       xhr.onload  = () => { try { resolve(JSON.parse(xhr.responseText)); } catch { reject(); } };
       xhr.onerror = () => reject();
       xhr.open('POST', '/api/' + fb.sid + '/upload?path=' + encodeURIComponent(fb.path));
+      xhr.setRequestHeader('X-CC-CSRF', CSRF);
       xhr.send(form);
     });
     fbProgHide();
@@ -1644,7 +2816,40 @@ function closeRestore() { document.getElementById('restore-overlay').classList.r
 
 function busyShow(label) {
   document.getElementById('busy-label').textContent = label;
+  busySet(null, '');
   document.getElementById('busy-overlay').classList.add('open');
+}
+function busySet(pct, val) {
+  const fill = document.getElementById('busy-fill');
+  if (pct == null) { fill.classList.add('indet'); fill.style.width = ''; }
+  else { fill.classList.remove('indet'); fill.style.width = Math.min(100, pct) + '%'; }
+  document.getElementById('busy-val').textContent = val || '';
+}
+const _mb = v => (v / 1048576).toFixed(1);
+async function runJob(jid, label) {
+  busyShow(label);
+  for (;;) {
+    const j = await api('GET', '/api/job/' + jid);
+    if (j.error && !j.state) throw new Error(j.error);
+    if (j.label) document.getElementById('busy-label').textContent = j.label;
+    if (j.total > 0) busySet(j.done / j.total * 100, j.unit === 'files' ? `${j.done} / ${j.total} files` : `${_mb(j.done)} / ${_mb(j.total)} MB`);
+    else busySet(null, j.unit === 'bytes' && j.done ? _mb(j.done) + ' MB' : '');
+    if (j.state === 'done') return j.result;
+    if (j.state === 'error') throw new Error(j.error);
+    await new Promise(r => setTimeout(r, 300));
+  }
+}
+function xhrUpload(url, form, label) {
+  busyShow(label);
+  return new Promise(resolve => {
+    const xhr = new XMLHttpRequest();
+    xhr.upload.onprogress = e => { if (e.lengthComputable) busySet(e.loaded / e.total * 100, `${_mb(e.loaded)} / ${_mb(e.total)} MB`); };
+    xhr.onload  = () => { try { resolve(JSON.parse(xhr.responseText)); } catch { resolve({error: 'upload failed'}); } };
+    xhr.onerror = () => resolve({error: 'upload failed'});
+    xhr.open('POST', url);
+    xhr.setRequestHeader('X-CC-CSRF', CSRF);
+    xhr.send(form);
+  });
 }
 function busyHide() { document.getElementById('busy-overlay').classList.remove('open'); }
 
@@ -1655,11 +2860,12 @@ async function submitRestore() {
   if (srv && srv.running) { flash('Stop the server before restoring', true); return; }
   if (!confirm(`Restore "${fname}" onto "${srv ? srv.name : sid}"?\n\nThis OVERWRITES all server files and cannot be undone.`)) return;
   closeRestore();
-  busyShow('Restoring backup...');
   try {
     const r = await api('POST', '/api/restore', {backup: fname, sid});
-    if (r.ok) flash(`Restored ${fname}`);
-    else flash(r.msg || r.error, true);
+    if (!r.job) flash(r.msg || r.error, true);
+    else { const res = await runJob(r.job, 'Restoring backup...'); flash(res.msg || `Restored ${fname}`); }
+  } catch (e) {
+    flash(e.message, true);
   } finally {
     busyHide();
   }
@@ -1685,7 +2891,7 @@ function openCreateFromBackup() {
   document.getElementById('cfb-min').value  = src ? src.memory_min_mb : 512;
   document.getElementById('cfb-max').value  = src ? src.memory_max_mb : 2048;
   document.getElementById('cfb-args').value = src ? (src.extra_args || '')
-    : '-XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:MaxGCPauseMillis=200';
+    : DEFAULT_JVM_ARGS;
   document.getElementById('cfb-overlay').classList.add('open');
 }
 
@@ -1707,11 +2913,14 @@ async function submitCreateFromBackup() {
   if (!body.directory) { flash('Directory is required', true); return; }
   if (body.memory_min_mb > body.memory_max_mb) { flash('Max RAM must be \\u2265 Min RAM', true); return; }
   closeCreateFromBackup();
-  busyShow('Creating server and extracting backup...');
   try {
     const r = await api('POST', '/api/create_from_backup', body);
-    if (r.ok) { flash(`Server "${body.name || body.id}" created from backup`); refresh(); }
-    else flash(r.error, true);
+    if (!r.ok) { flash(r.error, true); return; }
+    await runJob(r.job, 'Extracting backup...');
+    flash(`Server "${body.name || body.id}" created from backup`);
+    refresh();
+  } catch (e) {
+    flash(e.message, true);
   } finally {
     busyHide();
   }
@@ -1720,16 +2929,25 @@ async function submitCreateFromBackup() {
 // ── Auto-backup schedule ───────────────────────────────────────────────────────
 
 let _autoBackupCfg = {enabled: false, day: 'sunday', hour: 3, minute: 0};
+let _maxBackups = 0;
 
 function openAutoBackup() {
   document.getElementById('ab-enabled').value = _autoBackupCfg.enabled ? '1' : '0';
   document.getElementById('ab-day').value     = _autoBackupCfg.day    || 'sunday';
   document.getElementById('ab-hour').value    = _autoBackupCfg.hour   ?? 3;
   document.getElementById('ab-minute').value  = _autoBackupCfg.minute ?? 0;
+  document.getElementById('ab-max').value     = _maxBackups;
   document.getElementById('ab-overlay').classList.add('open');
 }
 
 function closeAutoBackup() { document.getElementById('ab-overlay').classList.remove('open'); }
+
+function normMaxBackups(v) {
+  v = parseInt(v) || 0;
+  return v <= 0 ? 0 : Math.max(3, Math.min(28, v));
+}
+
+function clampMaxBackups(el) { el.value = normMaxBackups(el.value); }
 
 async function submitAutoBackup() {
   const body = {
@@ -1737,10 +2955,12 @@ async function submitAutoBackup() {
     day:     document.getElementById('ab-day').value,
     hour:    parseInt(document.getElementById('ab-hour').value)   || 0,
     minute:  parseInt(document.getElementById('ab-minute').value) || 0,
+    max_backups: normMaxBackups(document.getElementById('ab-max').value),
   };
   const r = await api('POST', '/api/auto_backup', body);
   if (r.ok) {
     _autoBackupCfg = r.auto_backup;
+    _maxBackups = r.max_backups;
     renderScheduleDisplay(r.auto_backup);
     flash(body.enabled
       ? `Auto-backup scheduled - every ${body.day} at ${String(body.hour).padStart(2,'0')}:${String(body.minute).padStart(2,'0')}`
@@ -1758,10 +2978,14 @@ function startRefresh() {
   const secs  = Math.max(5, parseInt(input.value) || 5);
   input.value = secs;
   clearInterval(_refreshTimer);
-  _refreshTimer = setInterval(refresh, secs * 1000);
+  _refreshTimer = setInterval(() => { if (!document.hidden) refresh(); }, secs * 1000);
 }
 
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+
 document.getElementById('refresh-secs').addEventListener('change', startRefresh);
+
+fixLabels(document);
 
 // Restore last active page
 (function () {
@@ -1780,6 +3004,10 @@ startRefresh();
 # ── HTTP Handler ───────────────────────────────────────────────────────────────
 
 class Handler(BaseHTTPRequestHandler):
+    timeout        = 60              # idle socket timeout: drops slow/stalled connections
+    server_version = "CreeperCrest"
+    sys_version    = ""
+
     def log_message(self, *_): pass
 
     def send_json(self, data, code=200):
@@ -1787,14 +3015,18 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type",   "application/json")
         self.send_header("Content-Length", len(body))
+        self.send_header("Cache-Control",  "no-store")
+        self._security_headers()
         self.end_headers()
         self.wfile.write(body)
 
-    def send_html(self, html):
+    def send_html(self, html, code=200):
         body = html.encode()
-        self.send_response(200)
+        self.send_response(code)
         self.send_header("Content-Type",   "text/html; charset=utf-8")
         self.send_header("Content-Length", len(body))
+        self.send_header("Cache-Control",  "no-store")
+        self._security_headers()
         self.end_headers()
         self.wfile.write(body)
 
@@ -1803,12 +3035,154 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type",   content_type)
         self.send_header("Content-Length", len(data))
         if filename:
-            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            safe_name = re.sub(r"[^\w. -]", "_", filename)[:150] or "download"
+            self.send_header("Content-Disposition", f'attachment; filename="{safe_name}"')
+        self._security_headers()
         self.end_headers()
         self.wfile.write(data)
 
+    # ── Authentication gate ────────────────────────────────────────────────────
+
+    def _security_headers(self):
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Content-Security-Policy",
+                         "base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'")
+        if TLS_ON or self.headers.get("X-Forwarded-Proto", "") == "https":
+            self.send_header("Strict-Transport-Security", "max-age=31536000")
+
+    def _redirect(self, loc, cookie=None):
+        self.send_response(303)
+        self.send_header("Location", loc)
+        self.send_header("Content-Length", "0")
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
+        self._security_headers()
+        self.end_headers()
+
+    def _cookie(self, value, max_age):
+        flags = "HttpOnly; SameSite=Strict; Path=/"
+        if TLS_ON or self.headers.get("X-Forwarded-Proto", "") == "https":
+            flags += "; Secure"
+        return f"cc_session={value}; {flags}; Max-Age={max_age}"
+
+    def _session_token(self):
+        try:
+            c = SimpleCookie(self.headers.get("Cookie", ""))
+            return c["cc_session"].value if "cc_session" in c else ""
+        except Exception:
+            return ""
+
+    def _login_attempt(self):
+        ip = self.client_ip()
+        n = min(int(self.headers.get("Content-Length", 0) or 0), 4096)
+        form = parse_qs(self.rfile.read(n).decode("utf-8", "replace"))
+        user = form.get("username", [""])[0].strip().lower()[:64]
+        pw, code = form.get("password", [""])[0], form.get("totp", [""])[0]
+        if login_throttled(ip, user):
+            print(f"[auth] LOCKED OUT login attempt user={user!r} ip={ip}", flush=True)
+            return self.send_html(render_login("Too many failed attempts. Try again in 15 minutes."), 429)
+        rec = load_users().get(user)
+        pw_ok   = verify_password(pw, rec["pw"] if rec else _DUMMY_HASH)
+        step    = verify_totp(rec["totp"] if rec else _DUMMY_TOTP, code, user if rec else None)
+        if rec and pw_ok and step:
+            mark_totp_used(user, step)
+            print(f"[auth] login ok user={user} ip={ip}", flush=True)
+            return self._redirect("/", self._cookie(create_session(user), SESSION_MAX))
+        record_login_failure(ip, user)
+        print(f"[auth] login FAILED user={user!r} ip={ip}", flush=True)
+        return self.send_html(render_login("Invalid username, password or authenticator code."), 401)
+
+    def client_ip(self):
+        """Peer address; X-Forwarded-For is honoured only when the peer is a configured trusted proxy."""
+        peer = self.client_address[0]
+        trusted = set(cfg.get("trusted_proxies", []))
+        xff = self.headers.get("X-Forwarded-For", "")
+        if peer in trusted and xff:
+            for hop in reversed([h.strip() for h in xff.split(",")]):
+                if hop not in trusted:
+                    return hop
+        return peer
+
+    def _lan_open(self):
+        """True when LAN mode is on and this request comes straight from a private/loopback address."""
+        if not cfg.get("lan_mode"):
+            return False
+        if any(self.headers.get(h) for h in ("X-Forwarded-For", "Forwarded", "X-Real-IP", "Via", "CF-Connecting-IP")):
+            return False            # came through a proxy: could be the internet
+        try:
+            ip = ipaddress.ip_address(self.client_address[0].split("%")[0])
+        except ValueError:
+            return False
+        ip = getattr(ip, "ipv4_mapped", None) or ip
+        if not (ip.is_private or ip.is_loopback or ip.is_link_local):
+            return False
+        host = self.headers.get("Host", "").rsplit(":", 1)[0].strip("[]").lower()   # blocks DNS-rebinding hostnames
+        if host in ("localhost", socket.gethostname().lower()) or host.endswith(".local") \
+                or host in [h.lower() for h in cfg.get("allowed_hosts", [])]:
+            return True
+        try:
+            ipaddress.ip_address(host)
+            return True
+        except ValueError:
+            return False
+
+    def gate(self, method):
+        """Return True if the request was answered (login page, redirect, 401...); sets self.sess otherwise."""
+        self.sess = {"user": "(auth disabled)", "csrf": ""}
+        path = urlparse(self.path).path
+        if method == "POST" and int(self.headers.get("Content-Length", 0) or 0) > MAX_UPLOAD:
+            self.send_json({"error": "request too large"}, 413)
+            return True
+        if method == "GET" and path == "/favicon.ico":
+            self.send_response(204)
+            self.end_headers()
+            return True
+        if method == "GET" and path.startswith("/resourcepack/"):   # Minecraft clients cannot log in
+            return False
+        origin = self.headers.get("Origin")
+        if method in ("POST", "DELETE") and origin and urlparse(origin).netloc != self.headers.get("Host", ""):
+            self.send_json({"error": "cross-origin request refused"}, 403)
+            return True
+        open_mode = AUTH_DISABLED or self._lan_open()
+        if path == "/login":
+            if open_mode:
+                self._redirect("/")
+            elif method == "POST":
+                self._login_attempt()
+            elif get_session(self._session_token()):
+                self._redirect("/")
+            else:
+                self.send_html(render_login() if load_users() else render_setup_required())
+            return True
+        if open_mode:
+            sess = {"user": "(lan)", "csrf": _OPEN_TOKEN}
+        else:
+            sess = get_session(self._session_token())
+            if sess and sess["user"] not in load_users():
+                drop_session(self._session_token())
+                sess = None
+            if not sess:
+                if not load_users():
+                    self.send_html(render_setup_required(), 503)
+                elif path.startswith("/api/") or method != "GET":
+                    self.send_json({"error": "login required"}, 401)
+                else:
+                    self._redirect("/login")
+                return True
+        if method in ("POST", "DELETE") and not hmac.compare_digest(self.headers.get("X-CC-CSRF", ""), sess["csrf"]):
+            self.send_json({"error": "bad CSRF token - reload the page"}, 403)
+            return True
+        self.sess = sess
+        if method in ("POST", "DELETE"):
+            print(f"[audit] {sess['user']} {method} {path} from {self.client_ip()}", flush=True)
+        return False
+
     def body(self):
         n = int(self.headers.get("Content-Length", 0))
+        if n > 1 << 20:
+            raise ValueError("request body too large")
         return json.loads(self.rfile.read(n)) if n else {}
 
     def qs(self):
@@ -1817,14 +3191,40 @@ class Handler(BaseHTTPRequestHandler):
     def segs(self):
         return [s for s in urlparse(self.path).path.split("/") if s]
 
+    # ── HEAD (resource pack only) ──────────────────────────────────────────────
+
+    def do_HEAD(self):
+        parts = self.segs()
+        if len(parts) == 2 and parts[0] == "resourcepack" and parts[1].endswith(".zip"):
+            srv = servers.get(parts[1][:-4])
+            if srv and os.path.isfile(_rp_path(srv)):
+                self.send_response(200)
+                self.send_header("Content-Type",   "application/zip")
+                self.send_header("Content-Length", str(os.path.getsize(_rp_path(srv))))
+                self.end_headers()
+                return
+            self.send_response(404)
+        else:
+            self.send_response(405)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     # ── GET ────────────────────────────────────────────────────────────────────
 
     def do_GET(self):
+        if self.gate("GET"):
+            return
         parts = self.segs()
 
         if not parts:
             interval = str(int(cfg.get("refresh_interval", 5)))
-            return self.send_html(HTML.replace("__REFRESH_INTERVAL__", interval))
+            return self.send_html(HTML.replace("__REFRESH_INTERVAL__", interval)
+                                      .replace("__JVM_ARGS__", default_jvm_args())
+                                      .replace("__CSRF__", self.sess["csrf"])
+                                      .replace("__ACCT__", _acct_html(self.sess["user"])))
+
+        if parts == ["2fa-setup"]:
+            return self.send_html(render_2fa_setup(self.sess["user"]))
 
         if parts == ["api", "status"]:
             return self.send_json({
@@ -1833,13 +3233,24 @@ class Handler(BaseHTTPRequestHandler):
                 "backup_dir":  os.path.expanduser(cfg.get("backup_dir", "~/mc-backups")),
                 "sysinfo":     _get_sysinfo(),
                 "auto_backup": cfg.get("auto_backup", {"enabled": False, "day": "sunday", "hour": 3, "minute": 0}),
+                "max_backups": int(cfg.get("max_backups", 0) or 0),
             })
 
         if len(parts) == 3 and parts[0] == "api" and parts[2] == "logs":
             sid = parts[1]
             if sid not in servers:
                 return self.send_json({"error": "not found"}, 404)
-            return self.send_json({"logs": list(servers[sid].logs)})
+            srv   = servers[sid]
+            seq   = srv.log_seq
+            lines = list(srv.logs)
+            try:
+                since = int(self.qs().get("since", ["0"])[0])
+            except ValueError:
+                since = 0
+            new = seq - since
+            if since <= 0 or new < 0 or new > len(lines):
+                return self.send_json({"logs": lines, "seq": seq, "full": True})
+            return self.send_json({"logs": lines[len(lines) - new:] if new else [], "seq": seq, "full": False})
 
         # /api/{id}/files?path=
         if len(parts) == 3 and parts[0] == "api" and parts[2] == "files":
@@ -1879,16 +3290,56 @@ class Handler(BaseHTTPRequestHandler):
             self.send_bytes(data, "application/octet-stream", os.path.basename(safe))
             return
 
+        # /api/job/{id}  - progress of a background job
+        if len(parts) == 3 and parts[:2] == ["api", "job"]:
+            job = _jobs.get(parts[2])
+            if not job:
+                return self.send_json({"error": "job not found"}, 404)
+            return self.send_json(job.view())
+
+        # /api/browse?path=  - list sub-directories (folder picker)
+        if parts == ["api", "browse"]:
+            try:
+                return self.send_json(list_dirs(unquote(self.qs().get("path", ["~"])[0])))
+            except (OSError, ValueError) as e:
+                return self.send_json({"error": str(e)}, 400)
+
+        # /api/java?version=  - host Java vs the Java the chosen Minecraft version needs
+        if parts == ["api", "java"]:
+            ver = self.qs().get("version", [""])[0]
+            try:
+                req = required_java(ver) if re.match(r"^[A-Za-z0-9._-]+$", ver) else None
+            except Exception:
+                req = None
+            return self.send_json({"host": host_java_major(), "required": req})
+
+        # /api/jar_versions?type=paper
+        if parts == ["api", "jar_versions"]:
+            try:
+                return self.send_json({"versions": jar_versions(self.qs().get("type", [""])[0])})
+            except Exception as e:
+                return self.send_json({"error": f"could not load versions: {e}"}, 502)
+
+        # /resourcepack/{sid}.zip  - public, fetched by Minecraft clients
+        if len(parts) == 2 and parts[0] == "resourcepack" and parts[1].endswith(".zip"):
+            srv = servers.get(parts[1][:-4])
+            if not srv or not os.path.isfile(_rp_path(srv)):
+                return self.send_json({"error": "not found"}, 404)
+            with open(_rp_path(srv), "rb") as f:
+                data = f.read()
+            srv._append(f"[CreeperCrest] Resource pack requested by {self.client_ip()} "
+                        f"({re.sub(r'[^A-Za-z0-9_]', '', self.headers.get('X-Minecraft-Username', ''))[:16] or 'unknown player'})")
+            self.send_bytes(data, "application/zip", "resource-pack.zip")
+            return
+
         # /backups/{filename}
         if len(parts) == 2 and parts[0] == "backups":
-            fname   = parts[1]
-            bak_dir = os.path.expanduser(cfg.get("backup_dir", "~/mc-backups"))
-            fpath   = os.path.join(bak_dir, fname)
-            if not fname.endswith(".zip") or not os.path.isfile(fpath):
+            fpath = backup_path(unquote(parts[1]))
+            if not fpath or not os.path.isfile(fpath):
                 return self.send_json({"error": "not found"}, 404)
             with open(fpath, "rb") as f:
                 data = f.read()
-            self.send_bytes(data, "application/zip", fname)
+            self.send_bytes(data, "application/zip", os.path.basename(fpath))
             return
 
         self.send_json({"error": "not found"}, 404)
@@ -1896,7 +3347,19 @@ class Handler(BaseHTTPRequestHandler):
     # ── POST ───────────────────────────────────────────────────────────────────
 
     def do_POST(self):
+        if self.gate("POST"):
+            return
         parts = self.segs()
+
+        if parts == ["logout"]:
+            drop_session(self._session_token())
+            self.send_response(200)
+            self.send_header("Set-Cookie", self._cookie("", 0))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", "11")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+            return
 
         # /api/restore
         if parts == ["api", "restore"]:
@@ -1905,8 +3368,8 @@ class Handler(BaseHTTPRequestHandler):
             sid   = b.get("sid",    "").strip()
             if not fname or not sid:
                 return self.send_json({"error": "backup and sid required"}, 400)
-            ok, msg = restore_backup(fname, sid)
-            return self.send_json({"ok": ok, "msg": msg})
+            return self.send_json({"ok": True, "job": start_job(
+                "Restoring backup...", lambda job: {"msg": _expect_ok(restore_backup(fname, sid, job))}, "files")})
 
         # /api/auto_backup  - save auto-backup schedule
         if parts == ["api", "auto_backup"]:
@@ -1920,8 +3383,10 @@ class Handler(BaseHTTPRequestHandler):
             if sched["day"] not in _WEEKDAYS:
                 return self.send_json({"error": "invalid day"}, 400)
             cfg["auto_backup"] = sched
+            mb = int(b.get("max_backups", cfg.get("max_backups", 0)) or 0)
+            cfg["max_backups"] = 0 if mb <= 0 else max(3, min(28, mb))
             save_cfg(cfg)
-            return self.send_json({"ok": True, "auto_backup": sched})
+            return self.send_json({"ok": True, "auto_backup": sched, "max_backups": cfg["max_backups"]})
 
         # /api/import  - upload a zip, extract it, register a new server
         if parts == ["api", "import"]:
@@ -1936,6 +3401,8 @@ class Handler(BaseHTTPRequestHandler):
             sid = fields.get("id", "").strip().lower().replace(" ", "-")
             if not sid:
                 return self.send_json({"error": "id required"}, 400)
+            if not SID_RE.match(sid):
+                return self.send_json({"error": "id: lowercase letters, digits and dashes only (max 32)"}, 400)
             if sid in servers:
                 return self.send_json({"error": f'id "{sid}" already exists'}, 400)
 
@@ -1948,13 +3415,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": "no zip file uploaded"}, 400)
 
             dest = os.path.expanduser(directory)
-            os.makedirs(dest, exist_ok=True)
-            try:
-                with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
-                    zf.extractall(dest)
-            except Exception as e:
-                return self.send_json({"error": f"failed to extract zip: {e}"}, 400)
-
+            if not zipfile.is_zipfile(io.BytesIO(zip_data)):
+                return self.send_json({"error": "uploaded file is not a valid zip"}, 400)
             legacy = max(256, int(fields.get("memory_mb", "1024") or 1024))
             scfg = {
                 "name":          (fields.get("name", sid).strip() or sid),
@@ -1967,10 +3429,19 @@ class Handler(BaseHTTPRequestHandler):
             }
             if scfg["memory_min_mb"] > scfg["memory_max_mb"]:
                 return self.send_json({"error": "max RAM must be >= min RAM"}, 400)
-            cfg["servers"][sid] = scfg
-            save_cfg(cfg)
-            servers[sid] = ManagedServer(sid, scfg)
-            return self.send_json({"ok": True, "id": sid})
+
+            def finish(job):
+                os.makedirs(dest, exist_ok=True)
+                try:
+                    with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+                        _extract_zip(zf, dest, job)
+                except Exception as e:
+                    raise RuntimeError(f"failed to extract zip: {e}")
+                cfg["servers"][sid] = scfg
+                save_cfg(cfg)
+                servers[sid] = ManagedServer(sid, scfg)
+                return {"id": sid}
+            return self.send_json({"ok": True, "job": start_job("Extracting server files...", finish, "files")})
 
         # /api/create_from_backup - register a new server and extract a backup into it
         if parts == ["api", "create_from_backup"]:
@@ -1979,24 +3450,18 @@ class Handler(BaseHTTPRequestHandler):
             sid   = b.get("id", "").strip().lower().replace(" ", "-")
             if not sid:
                 return self.send_json({"error": "id required"}, 400)
+            if not SID_RE.match(sid):
+                return self.send_json({"error": "id: lowercase letters, digits and dashes only (max 32)"}, 400)
             if sid in servers:
                 return self.send_json({"error": f'id "{sid}" already exists'}, 400)
             if not fname:
                 return self.send_json({"error": "backup required"}, 400)
-            bak_dir = os.path.expanduser(cfg.get("backup_dir", "~/mc-backups"))
-            fpath   = os.path.join(bak_dir, fname)
-            if not fname.endswith(".zip") or not os.path.isfile(fpath):
+            fpath = backup_path(fname)
+            if not fpath or not os.path.isfile(fpath):
                 return self.send_json({"error": "backup file not found"}, 400)
             directory = b.get("directory", "").strip()
             if not directory:
                 return self.send_json({"error": "directory required"}, 400)
-            dest = os.path.expanduser(directory)
-            os.makedirs(dest, exist_ok=True)
-            try:
-                with zipfile.ZipFile(fpath, "r") as zf:
-                    zf.extractall(dest)
-            except Exception as e:
-                return self.send_json({"error": f"failed to extract backup: {e}"}, 400)
             legacy = max(256, int(b.get("memory_mb", 1024)))
             scfg = {
                 "name":          b.get("name", sid).strip() or sid,
@@ -2009,11 +3474,33 @@ class Handler(BaseHTTPRequestHandler):
             }
             if scfg["memory_min_mb"] > scfg["memory_max_mb"]:
                 return self.send_json({"error": "max RAM must be >= min RAM"}, 400)
-            cfg["servers"][sid] = scfg
-            save_cfg(cfg)
-            servers[sid] = ManagedServer(sid, scfg)
-            servers[sid]._append(f"[CreeperCrest] Created from backup: {fname}")
-            return self.send_json({"ok": True, "id": sid})
+            dest = os.path.expanduser(directory)
+            def finish(job):
+                os.makedirs(dest, exist_ok=True)
+                try:
+                    with zipfile.ZipFile(fpath, "r") as zf:
+                        _extract_zip(zf, dest, job)
+                except Exception as e:
+                    raise RuntimeError(f"failed to extract backup: {e}")
+                cfg["servers"][sid] = scfg
+                save_cfg(cfg)
+                servers[sid] = ManagedServer(sid, scfg)
+                servers[sid]._append(f"[CreeperCrest] Created from backup: {fname}")
+                return {"id": sid}
+            return self.send_json({"ok": True, "job": start_job("Extracting backup...", finish, "files")})
+
+        # /api/browse_mkdir  - create a folder from the folder picker
+        if parts == ["api", "browse_mkdir"]:
+            b    = self.body()
+            name = b.get("name", "").strip()
+            if not name or re.search(r"[/\\]", name) or name in (".", ".."):
+                return self.send_json({"error": "invalid folder name"}, 400)
+            try:
+                base = os.path.abspath(os.path.expanduser(b.get("path", "")))
+                os.makedirs(os.path.join(base, name), exist_ok=True)
+                return self.send_json({"ok": True, "path": os.path.join(base, name)})
+            except OSError as e:
+                return self.send_json({"error": str(e)}, 400)
 
         # /api/add
         if parts == ["api", "add"]:
@@ -2021,6 +3508,8 @@ class Handler(BaseHTTPRequestHandler):
             sid = b.get("id", "").strip().lower().replace(" ", "-")
             if not sid:
                 return self.send_json({"error": "id required"}, 400)
+            if not SID_RE.match(sid):
+                return self.send_json({"error": "id: lowercase letters, digits and dashes only (max 32)"}, 400)
             if sid in servers:
                 return self.send_json({"error": f'id "{sid}" already exists'}, 400)
             legacy = max(256, int(b.get("memory_mb", 1024)))
@@ -2032,12 +3521,63 @@ class Handler(BaseHTTPRequestHandler):
                 "memory_max_mb": max(256, int(b.get("memory_max_mb", legacy))),
                 "extra_args":    b.get("extra_args", "").strip(),
                 "autostart":     bool(b.get("autostart", False)),
+                "resource_pack":      b.get("resource_pack", "").strip(),
+                "resource_pack_sha1": b.get("resource_pack_sha1", "").strip().lower(),
+                "resource_pack_required": bool(b.get("resource_pack_required", False)),
+                "resource_pack_prompt":   b.get("resource_pack_prompt", "").strip(),
             }
             if scfg["memory_min_mb"] > scfg["memory_max_mb"]:
                 return self.send_json({"error": "max RAM must be >= min RAM"}, 400)
-            cfg["servers"][sid] = scfg
-            save_cfg(cfg)
-            servers[sid] = ManagedServer(sid, scfg)
+            perr = _check_pack(scfg["resource_pack"], scfg["resource_pack_sha1"], scfg["resource_pack_prompt"])
+            props, perr2 = validate_props(b.get("properties"))
+            perr = perr or perr2
+            if perr:
+                return self.send_json({"error": perr}, 400)
+            if not scfg["directory"]:
+                return self.send_json({"error": "directory required"}, 400)
+            jtype = b.get("jar_type", "").strip().lower()
+            ver   = b.get("jar_version", "").strip()
+            if jtype:
+                if jtype not in JAR_TYPES:
+                    return self.send_json({"error": "unknown server type"}, 400)
+                if os.path.basename(scfg["jar"]) != scfg["jar"]:
+                    return self.send_json({"error": "JAR must be a plain filename"}, 400)
+                if not ver:
+                    return self.send_json({"error": "pick a Minecraft version"}, 400)
+            eula = bool(b.get("eula"))
+
+            def finish(job=None):
+                dest_dir = os.path.expanduser(scfg["directory"])
+                try:
+                    os.makedirs(dest_dir, exist_ok=True)
+                except OSError as e:
+                    raise RuntimeError(f"cannot create folder: {e}")
+                if jtype:
+                    try:
+                        download_jar(jtype, ver, os.path.join(dest_dir, scfg["jar"]), job)
+                    except Exception as e:
+                        raise RuntimeError(f"JAR download failed: {e}")
+                try:
+                    if props:
+                        _set_properties(scfg["directory"], props)
+                    if eula:
+                        with open(os.path.join(dest_dir, "eula.txt"), "w") as f:
+                            f.write("eula=true\n")
+                    if scfg["resource_pack"] or scfg["resource_pack_required"] or scfg["resource_pack_prompt"]:
+                        _apply_resource_pack(scfg)
+                except OSError as e:
+                    raise RuntimeError(f"failed to write server.properties: {e}")
+                cfg["servers"][sid] = scfg
+                save_cfg(cfg)
+                servers[sid] = ManagedServer(sid, scfg)
+                return {"id": sid}
+
+            if jtype:
+                return self.send_json({"ok": True, "job": start_job("Downloading server JAR...", finish)})
+            try:
+                finish()
+            except RuntimeError as e:
+                return self.send_json({"error": str(e)}, 400)
             return self.send_json({"ok": True, "id": sid})
 
         if len(parts) == 3 and parts[0] == "api":
@@ -2118,6 +3658,23 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_bytes(buf.getvalue(), "application/zip", f"{sid}-files.zip")
                 return
 
+            # multipart body must be read before the JSON body parse below
+            if action == "rp_upload":
+                ct = self.headers.get("Content-Type", "")
+                cl = int(self.headers.get("Content-Length", 0))
+                if "boundary=" not in ct:
+                    return self.send_json({"error": "expected multipart/form-data"}, 400)
+                if cl > RP_MAX_BYTES + 65536:
+                    return self.send_json({"error": "Pack larger than 250 MB"}, 400)
+                boundary = ct.split("boundary=")[1].strip().encode()
+                files = _parse_multipart(self.rfile.read(cl), boundary)
+                if not files:
+                    return self.send_json({"error": "no file uploaded"}, 400)
+                ok, msg = install_resource_pack(srv, files[0][1], self.headers.get("Host", "localhost"))
+                if not ok:
+                    return self.send_json({"error": msg}, 400)
+                return self.send_json({"ok": True, **_rp_result(srv, msg)})
+
             # standard actions
             b = self.body()
             if action == "start":
@@ -2129,8 +3686,18 @@ class Handler(BaseHTTPRequestHandler):
             elif action == "command":
                 ok, msg = srv.send_command(b.get("command", ""))
             elif action == "backup":
-                ok, result = do_backup(sid)
-                return self.send_json({"ok": ok, "result": result})
+                return self.send_json({"ok": True, "job": start_job(
+                    "Creating backup...", lambda job: _expect_ok(do_backup(sid, job)))})
+            elif action == "rp_fetch":
+                url  = b.get("url", "").strip()
+                host = self.headers.get("Host", "localhost")
+                if not re.match(r"^https?://", url, re.I):
+                    return self.send_json({"error": "URL must start with http:// or https://"}, 400)
+                def finish(job):
+                    data = fetch_url(url, job)
+                    job.label, job.total = "Installing resource pack...", 0
+                    return _rp_result(srv, _expect_ok(install_resource_pack(srv, data, host)))
+                return self.send_json({"ok": True, "job": start_job("Downloading resource pack...", finish)})
             elif action == "config":
                 if "name" in b and b["name"].strip():
                     srv.cfg["name"] = b["name"].strip()
@@ -2146,8 +3713,30 @@ class Handler(BaseHTTPRequestHandler):
                     srv.cfg["extra_args"] = b["extra_args"]
                 if "autostart" in b:
                     srv.cfg["autostart"] = bool(b["autostart"])
+                _rpk = ("resource_pack", "resource_pack_sha1", "resource_pack_required", "resource_pack_prompt")
+                old_rp = tuple(srv.cfg.get(k, "") for k in _rpk)
+                if "resource_pack_required" in b:
+                    srv.cfg["resource_pack_required"] = bool(b["resource_pack_required"])
+                if "resource_pack_prompt" in b:
+                    srv.cfg["resource_pack_prompt"] = b["resource_pack_prompt"].strip()
+                if "resource_pack" in b:
+                    srv.cfg["resource_pack"] = b["resource_pack"].strip()
+                if "resource_pack_sha1" in b:
+                    srv.cfg["resource_pack_sha1"] = b["resource_pack_sha1"].strip().lower()
+                rp_changed = tuple(srv.cfg.get(k, "") for k in _rpk) != old_rp
+                perr = _check_pack(srv.cfg.get("resource_pack", ""), srv.cfg.get("resource_pack_sha1", ""),
+                                   srv.cfg.get("resource_pack_prompt", ""))
+                if perr:
+                    for k, v in zip(_rpk, old_rp):
+                        srv.cfg[k] = v
+                    return self.send_json({"error": perr}, 400)
                 if srv.cfg.get("memory_min_mb", 256) > srv.cfg.get("memory_max_mb", 256):
                     return self.send_json({"error": "max RAM must be >= min RAM"}, 400)
+                if rp_changed:
+                    try:
+                        _apply_resource_pack(srv.cfg)
+                    except OSError as e:
+                        return self.send_json({"error": f"failed to write server.properties: {e}"}, 400)
                 cfg["servers"][sid] = srv.cfg
                 save_cfg(cfg)
                 ok, msg = True, "Saved"
@@ -2161,14 +3750,14 @@ class Handler(BaseHTTPRequestHandler):
     # ── DELETE ─────────────────────────────────────────────────────────────────
 
     def do_DELETE(self):
+        if self.gate("DELETE"):
+            return
         parts = self.segs()
 
         # /api/backup/{filename}  - delete a backup zip
         if len(parts) == 3 and parts[0] == "api" and parts[1] == "backup":
-            fname   = unquote(parts[2])
-            bak_dir = os.path.expanduser(cfg.get("backup_dir", "~/mc-backups"))
-            fpath   = os.path.join(bak_dir, fname)
-            if not fname.endswith(".zip") or not os.path.isfile(fpath):
+            fpath = backup_path(unquote(parts[2]))
+            if not fpath or not os.path.isfile(fpath):
                 return self.send_json({"error": "not found"}, 404)
             try:
                 os.remove(fpath)
@@ -2224,6 +3813,9 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     import signal as _sig
 
+    if len(sys.argv) > 1 and sys.argv[1] in CLI_COMMANDS:
+        sys.exit(cli(sys.argv[1:]))
+
     host = cfg.get("host", "0.0.0.0")
     port = int(cfg.get("port", 8080))
 
@@ -2248,8 +3840,20 @@ def main():
             if not ok:
                 print(f"    Failed: {msg}")
 
+    if AUTH_DISABLED:
+        print("WARNING: auth_disabled is set - the panel has NO login. Anyone who can reach it controls your servers.")
+    elif cfg.get("lan_mode"):
+        print("LAN mode ON: private-network clients need no login; other addresses must sign in. Never port-forward this panel.")
+    if not AUTH_DISABLED and not load_users() and not cfg.get("lan_mode"):
+        print("WARNING: no users exist, so the panel is locked. Create one with:  python3 creepercrest.py adduser <name>")
+
     httpd = ThreadingHTTPServer((host, port), Handler)
-    print(f"CreeperCrest  →  http://{host}:{port}")
+    if TLS_ON:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.load_cert_chain(os.path.expanduser(cfg["tls_cert"]), os.path.expanduser(cfg["tls_key"]))
+        httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+    print(f"CreeperCrest  →  {'https' if TLS_ON else 'http'}://{host}:{port}")
     print(f"Backups    →  {os.path.expanduser(cfg.get('backup_dir', '~/mc-backups'))}")
     print("Press Ctrl+C to stop.\n")
     httpd.serve_forever()
