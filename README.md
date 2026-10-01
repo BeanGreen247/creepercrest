@@ -94,7 +94,7 @@ CreeperCrest is a remote-control panel: anyone who can sign in can run commands 
 
 **Built in**
 - Password + TOTP 2FA, scrypt hashing, login throttling, replay-proof codes, 8 h idle / 24 h sessions, `HttpOnly` + `SameSite=Strict` cookies (`Secure` over HTTPS).
-- CSRF token on every state-changing request, plus an `Origin` check; security headers (`CSP`, `X-Frame-Options`, `nosniff`, `no-referrer`, HSTS over HTTPS).
+- CSRF token on every state-changing request, plus an `Origin` check; security headers (`CSP`, `X-Frame-Options`, `nosniff`, `Referrer-Policy: same-origin`, HSTS over HTTPS).
 - File access is confined to each server's directory (symlink-safe); backup names are validated; server IDs are restricted; file names are never placed in inline JavaScript.
 - Resource-pack downloads from a URL refuse private/internal addresses (SSRF guard) unless LAN mode or `allow_private_fetch` is on.
 - Idle connections are dropped after 60 s; request bodies are capped (2 GB uploads, 1 MB JSON). The service unit sets `NoNewPrivileges` and friends.
