@@ -12,6 +12,7 @@ import zipfile
 import time
 import threading
 import subprocess
+import shutil
 import hashlib
 import socket
 import uuid
@@ -742,6 +743,7 @@ servers = {sid: ManagedServer(sid, sc) for sid, sc in cfg.get("servers", {}).ite
 # ── Authentication (password + TOTP 2FA) ───────────────────────────────────────
 
 USERS_FILE    = os.path.join(BASE_DIR, "users.json")
+EDIT_MAX      = 512 * 1024                    # largest file the built-in text editor opens or saves
 MAX_UPLOAD    = 2 * 1024 ** 3                 # largest accepted request body (uploads are held in memory)
 _OPEN_TOKEN   = secrets.token_urlsafe(24)     # CSRF token for LAN / open mode (no session to bind it to)
 TLS_ON        = bool(cfg.get("tls_cert") and cfg.get("tls_key"))
@@ -1310,7 +1312,20 @@ section+section{margin-top:2.2rem}
 .cmd-row input[type=text]{flex:1;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;
   padding:.3rem .55rem;border-radius:5px;font-size:.83rem;font-family:monospace;outline:none}
 .cmd-row input[type=text]:focus{border-color:#58a6ff}
-.wl-list{margin-top:.4rem;font-size:.8rem;color:#8b949e;word-break:break-word}
+.wl-input{flex:1;min-width:160px;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;padding:.4rem .7rem;border-radius:5px;font-size:.85rem;outline:none}
+.wl-input:focus{border-color:#58a6ff}
+#wl-overlay{z-index:210}
+.fb-split{display:flex;flex:1;min-height:0}
+.fb-split .fb-body{flex:1;min-width:0}
+.fb-editor{display:none;flex:1.2;min-width:0;flex-direction:column;border-left:1px solid #30363d;background:#0d1117}
+.fb-modal.with-editor{width:min(1500px,98vw)}
+.fb-modal.with-editor .fb-editor{display:flex}
+.fb-modal.with-editor .fb-body{flex:.8}
+.fb-ed-bar{display:flex;align-items:center;gap:.5rem;padding:.6rem .8rem;border-bottom:1px solid #21262d}
+.fb-ed-name{flex:1;min-width:0;font-size:.82rem;color:#c9d1d9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fb-ed-name.dirty::after{content:" (unsaved)";color:#e3b341}
+#fb-ed-text{flex:1;width:100%;resize:none;border:0;outline:none;background:#0d1117;color:#c9d1d9;
+  font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:.8rem;tab-size:4;white-space:pre;overflow:auto}
 
 /* ── Backups ── */
 .backup-row{display:flex;align-items:center;gap:1rem;padding:.6rem .9rem;
@@ -1792,7 +1807,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
 
 <!-- File browser overlay -->
 <div class="overlay" id="fb-overlay">
-  <div class="fb-modal">
+  <div class="fb-modal" id="fb-modal">
     <div class="fb-header">
       <h3 id="fb-title">Files</h3>
       <div class="breadcrumb" id="fb-crumb"></div>
@@ -1816,6 +1831,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
       <div class="fb-prog-track"><div class="fb-prog-fill" id="fb-prog-fill"></div></div>
       <span class="fb-prog-val"  id="fb-prog-val"></span>
     </div>
+    <div class="fb-split">
     <div class="fb-body">
       <table class="fb-table">
         <thead><tr>
@@ -1827,7 +1843,40 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
         <tbody id="fb-rows"></tbody>
       </table>
     </div>
+    <div class="fb-editor" id="fb-editor">
+      <div class="fb-ed-bar">
+        <span class="fb-ed-name" id="fb-ed-name"></span>
+        <button class="btn bg-green" id="fb-ed-save" onclick="edSave()">&#128190; Save</button>
+        <button class="btn bg-blue" onclick="edDownload()">&#8681;</button>
+        <button class="btn bg-gray" onclick="edClose()">&#10005;</button>
+      </div>
+      <textarea id="fb-ed-text" spellcheck="false" wrap="off"></textarea>
+    </div>
+    </div>
     <div class="fb-foot" id="fb-foot"></div>
+  </div>
+</div>
+
+<!-- Whitelist editor overlay -->
+<div class="overlay" id="wl-overlay">
+  <div class="fb-modal" style="width:min(640px,96vw)">
+    <div class="fb-header">
+      <h3 id="wl-title">Whitelist</h3>
+      <button class="btn bg-gray" onclick="closeWL()">&#10005;</button>
+    </div>
+    <div class="fb-toolbar">
+      <input type="text" id="wl-name" class="wl-input" placeholder="Player name to add" maxlength="32"
+        onkeydown="if(event.key==='Enter')wlAdd()"/>
+      <button class="btn bg-green" onclick="wlAdd()">Add</button>
+      <span id="wl-count" style="margin-left:auto;font-size:.75rem;color:#7d8590"></span>
+    </div>
+    <div class="fb-body">
+      <table class="fb-table">
+        <thead><tr><th>Player</th><th>UUID</th><th style="width:80px"></th></tr></thead>
+        <tbody id="wl-rows"></tbody>
+      </table>
+    </div>
+    <div class="fb-foot">The server must be running to add players. Removing works any time and kicks the player if they are online.</div>
   </div>
 </div>
 
@@ -2000,6 +2049,7 @@ function cardHTML(s) {
       <button class="btn bg-red"    ${run?'':'disabled'} onclick="act('${s.id}','stop')">&#9632; Stop</button>
       <button class="btn bg-blue"   onclick="act('${s.id}','restart')">&#8635; Restart</button>
       <button class="btn bg-teal"   onclick="openFB('${s.id}')">&#128193; Files</button>
+      <button class="btn bg-blue"   onclick="openWL('${s.id}')">&#128100; Whitelist</button>
       <button class="btn bg-yellow" onclick="doBackup('${s.id}',this)">&#128190; Backup</button>
       <button class="btn bg-gray"   onclick="openEdit('${s.id}')">&#9998; Edit</button>
       <button class="btn ${s.autostart?'bg-green':'bg-gray'} btn-full" onclick="toggleAutostart('${s.id}',${s.autostart})">&#9654;&#9654; Autostart: ${s.autostart?'ON':'OFF'}</button>
@@ -2017,13 +2067,6 @@ function cardHTML(s) {
         onkeydown="if(event.key==='Enter')sendCmd('${s.id}')"/>
       <button class="btn bg-gray" onclick="sendCmd('${s.id}')">Send</button>
     </div>
-    <div class="cmd-row" id="wl-${s.id}">
-      <input type="text" id="wlin-${s.id}" placeholder="Player name (or UUID to remove)" maxlength="36"
-        onkeydown="if(event.key==='Enter')wlChange('${s.id}','add')"/>
-      <button class="btn bg-gray" onclick="wlChange('${s.id}','add')">Whitelist</button>
-      <button class="btn bg-gray" onclick="wlChange('${s.id}','remove')">Remove</button>
-    </div>
-    <div class="wl-list" id="wllist-${s.id}"></div>
   </div>
 </div>`;
 }
@@ -2211,35 +2254,61 @@ async function sendCmd(sid) {
   fetchLogs(sid);
 }
 
-async function wlLoad(sid) {
-  const el = document.getElementById(`wllist-${sid}`);
-  if (!el) return;
-  const r = await api('GET', `/api/${sid}/whitelist`);
-  el.textContent = '';
-  if (!r.entries) return;
-  el.append('Whitelisted (click a name to fill in its UUID for removal): ');
-  if (!r.entries.length) el.append('nobody yet');
-  r.entries.forEach((e, i) => {
-    const a = document.createElement('a');
-    a.textContent = e.name || e.uuid;
-    a.title = e.uuid;
-    a.style.cursor = 'pointer';
-    a.onclick = () => { document.getElementById(`wlin-${sid}`).value = e.uuid; };
-    if (i) el.append(', ');
-    el.append(a);
-  });
+const wl = {sid: null};
+
+function openWL(sid) {
+  wl.sid = sid;
+  const srv = document.querySelector(`#card-${sid} .card-name`);
+  document.getElementById('wl-title').textContent = 'Whitelist - ' + (srv ? srv.textContent : sid);
+  document.getElementById('wl-name').value = '';
+  document.getElementById('wl-overlay').classList.add('open');
+  wlLoad();
 }
 
-async function wlChange(sid, op) {
-  const inp = document.getElementById(`wlin-${sid}`);
-  const name = inp.value.trim();
-  const isUuid = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i.test(name);
-  if (!/^[A-Za-z0-9_.]{1,32}$/.test(name) && !(op === 'remove' && isUuid)) { flash('Enter a valid player name' + (op === 'remove' ? ' or UUID' : ''), true); return; }
-  const r = await api('POST', `/api/${sid}/whitelist`, {name, op});
+function closeWL() {
+  document.getElementById('wl-overlay').classList.remove('open');
+}
+
+async function wlLoad() {
+  const r = await api('GET', `/api/${wl.sid}/whitelist`);
+  if (r.error) { flash(r.error, true); return; }
+  const body = document.getElementById('wl-rows');
+  const entries = r.entries || [];
+  document.getElementById('wl-count').textContent = `${entries.length} player${entries.length === 1 ? '' : 's'} whitelisted`;
+  body.textContent = '';
+  if (!entries.length) {
+    const tr = body.insertRow(), td = tr.insertCell();
+    td.colSpan = 3; td.className = 'fb-empty'; td.textContent = 'Nobody is whitelisted';
+    return;
+  }
+  for (const e of entries) {
+    const tr = body.insertRow();
+    tr.insertCell().textContent = e.name || '(unknown)';
+    const u = tr.insertCell(); u.className = 'fsize'; u.textContent = e.uuid;
+    const btn = document.createElement('button');
+    btn.className = 'btn bg-danger'; btn.textContent = 'Remove';
+    btn.onclick = () => wlRemove(e);
+    tr.insertCell().append(btn);
+  }
+}
+
+async function wlRemove(e) {
+  if (!confirm(`Remove ${e.name || e.uuid} from the whitelist?`)) return;
+  const r = await api('POST', `/api/${wl.sid}/whitelist`, {name: e.uuid || e.name, op: 'remove'});
   if (!r.ok) { flash(r.msg || r.error, true); return; }
-  flash(op === 'add' ? `${name} whitelisted` : `${name} removed from whitelist`);
+  flash(`${e.name || e.uuid} removed`);
+  wlLoad();
+}
+
+async function wlAdd() {
+  const inp = document.getElementById('wl-name');
+  const name = inp.value.trim();
+  if (!/^[A-Za-z0-9_.]{1,32}$/.test(name)) { flash('Enter a valid player name', true); return; }
+  const r = await api('POST', `/api/${wl.sid}/whitelist`, {name, op: 'add'});
+  if (!r.ok) { flash(r.msg || r.error, true); return; }
+  flash(`${name} whitelisted`);
   inp.value = '';
-  setTimeout(() => wlLoad(sid), 800);
+  setTimeout(wlLoad, 800);
 }
 
 const _logSeq = {};
@@ -2262,7 +2331,7 @@ async function fetchLogs(sid) {
 }
 
 function fetchAllLogs(list) {
-  for (const s of list) { fetchLogs(s.id); wlLoad(s.id); }
+  for (const s of list) fetchLogs(s.id);
 }
 
 async function toggleAutostart(sid, current) {
@@ -2725,6 +2794,10 @@ function fbUp() {
 }
 
 function closeFB() {
+  if (ed.dirty && !confirm('Discard unsaved changes?')) return;
+  ed.path = null; edMark(false);
+  document.getElementById('fb-ed-text').value = '';
+  document.getElementById('fb-modal').classList.remove('with-editor');
   document.getElementById('fb-overlay').classList.remove('open');
 }
 
@@ -2782,10 +2855,63 @@ document.getElementById('fb-crumb').addEventListener('click', ev => {
 document.getElementById('fb-rows').addEventListener('click', ev => {
   const t = ev.target.closest('.fn');
   if (!t) return;
-  if (t.dataset.kind === 'dir') loadDir(t.dataset.path); else dlFile(t.dataset.path);
+  if (t.dataset.kind === 'dir') loadDir(t.dataset.path);
+  else if (EDITABLE.test(t.dataset.path)) edOpen(t.dataset.path);
+  else dlFile(t.dataset.path);
 });
 document.getElementById('fb-rows').addEventListener('change', ev => {
   if (ev.target.matches('input[type=checkbox]')) toggleSel(ev.target.dataset.name);
+});
+
+// Built-in text editor: opens to the right of the file list for text-like files.
+const EDITABLE = /[.](properties|json|ya?ml|txt|log|cfg|conf|toml|ini|md|xml|csv|sh|mcmeta|lang|secret|env|bat|js|py)$/i;
+const ed = {path: null, dirty: false};
+
+function edMark(dirty) {
+  ed.dirty = dirty;
+  document.getElementById('fb-ed-name').classList.toggle('dirty', dirty);
+}
+
+async function edOpen(path) {
+  if (ed.dirty && !confirm('Discard unsaved changes?')) return;
+  const r = await api('GET', `/api/${fb.sid}/filetext?path=${encodeURIComponent(path)}`);
+  if (r.error) { flash(r.error, true); return; }
+  ed.path = path;
+  document.getElementById('fb-ed-name').textContent = path;
+  const ta = document.getElementById('fb-ed-text');
+  ta.value = r.text;
+  ta.scrollTop = 0;
+  document.getElementById('fb-modal').classList.add('with-editor');
+  edMark(false);
+  ta.focus();
+}
+
+async function edSave() {
+  if (!ed.path) return;
+  const r = await api('POST', `/api/${fb.sid}/filesave?path=${encodeURIComponent(ed.path)}`,
+                      {text: document.getElementById('fb-ed-text').value});
+  if (r.ok) { edMark(false); flash('Saved ' + ed.path.split('/').pop()); loadDir(fb.path); }
+  else flash(r.error, true);
+}
+
+function edDownload() { if (ed.path) dlFile(ed.path); }
+
+function edClose() {
+  if (ed.dirty && !confirm('Discard unsaved changes?')) return;
+  ed.path = null; edMark(false);
+  document.getElementById('fb-ed-text').value = '';
+  document.getElementById('fb-modal').classList.remove('with-editor');
+}
+
+document.getElementById('fb-ed-text').addEventListener('input', () => edMark(true));
+document.getElementById('fb-ed-text').addEventListener('keydown', ev => {
+  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 's') { ev.preventDefault(); edSave(); }
+  if (ev.key === 'Tab') {
+    ev.preventDefault();
+    const t = ev.target, a = t.selectionStart;
+    t.setRangeText('  ', a, t.selectionEnd, 'end');
+    edMark(true);
+  }
 });
 
 function fileIcon(name) {
@@ -3412,6 +3538,26 @@ class Handler(BaseHTTPRequestHandler):
             entries.sort(key=lambda e: (0 if e["type"] == "dir" else 1, e["name"].lower()))
             return self.send_json({"path": rel, "entries": entries})
 
+        # /api/{id}/filetext?path=  - read a text file for the built-in editor
+        if len(parts) == 3 and parts[0] == "api" and parts[2] == "filetext":
+            sid = parts[1]
+            if sid not in servers:
+                return self.send_json({"error": "not found"}, 404)
+            safe = _safe_path(servers[sid].cfg.get("directory", ""), unquote(self.qs().get("path", [""])[0]))
+            if not safe or not os.path.isfile(safe):
+                return self.send_json({"error": "file not found"}, 404)
+            if os.path.getsize(safe) > EDIT_MAX:
+                return self.send_json({"error": f"file is larger than {EDIT_MAX // 1024} KB; download it instead"}, 400)
+            try:
+                with open(safe, "rb") as f:
+                    raw = f.read()
+                if b"\0" in raw:
+                    raise UnicodeDecodeError("utf-8", b"", 0, 1, "binary")
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                return self.send_json({"error": "not a UTF-8 text file"}, 400)
+            return self.send_json({"text": text, "crlf": "\r\n" in text})
+
         # /api/{id}/file?path=  - download single file
         if len(parts) == 3 and parts[0] == "api" and parts[2] == "file":
             sid = parts[1]
@@ -3747,6 +3893,33 @@ class Handler(BaseHTTPRequestHandler):
                         f.write(data)
                     saved += 1
                 return self.send_json({"ok": True, "count": saved})
+
+            # /api/{id}/filesave?path=  - overwrite an existing text file from the built-in editor
+            if action == "filesave":
+                b    = self.body()
+                text = b.get("text")
+                safe = _safe_path(srv.cfg.get("directory", ""), unquote(self.qs().get("path", [""])[0]))
+                if not isinstance(text, str) or not safe or not os.path.isfile(safe):
+                    return self.send_json({"error": "invalid file"}, 400)
+                data = text.encode("utf-8")
+                if len(data) > EDIT_MAX:
+                    return self.send_json({"error": f"file would exceed {EDIT_MAX // 1024} KB"}, 400)
+                try:
+                    with open(safe, "rb") as f:
+                        head = f.read(EDIT_MAX + 1)
+                    if b"\0" in head or len(head) > EDIT_MAX:
+                        return self.send_json({"error": "refusing to overwrite a binary or oversized file"}, 400)
+                    head.decode("utf-8")
+                    tmp = safe + ".cc-part"
+                    with open(tmp, "wb") as f:
+                        f.write(data)
+                    shutil.copymode(safe, tmp)
+                    os.replace(tmp, safe)
+                except UnicodeDecodeError:
+                    return self.send_json({"error": "refusing to overwrite a non-UTF-8 file"}, 400)
+                except OSError as e:
+                    return self.send_json({"error": str(e)}, 500)
+                return self.send_json({"ok": True, "size": len(data)})
 
             # /api/{id}/mkdir?path=  - create a folder
             if action == "mkdir":
