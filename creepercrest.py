@@ -1318,7 +1318,9 @@ section+section{margin-top:2.2rem}
 .fb-split{display:flex;flex:1;min-height:0}
 .fb-split .fb-body{flex:1;min-width:0}
 .fb-editor{display:none;flex:1.2;min-width:0;flex-direction:column;border-left:1px solid #30363d;background:#0d1117}
-.fb-modal.with-editor{width:min(1500px,98vw)}
+.fb-modal.with-editor{width:min(1800px,98vw)}
+.fb-ed-cm{flex:1;min-height:0;overflow:hidden}
+.fb-ed-cm .cm-editor{height:100%}
 .fb-modal.with-editor .fb-editor{display:flex}
 .fb-modal.with-editor .fb-body{flex:.8}
 .fb-ed-bar{display:flex;align-items:center;gap:.5rem;padding:.6rem .8rem;border-bottom:1px solid #21262d}
@@ -1374,7 +1376,7 @@ section+section{margin-top:2.2rem}
 /* ── File browser ── */
 #fb-overlay{z-index:200}
 .fb-modal{background:#161b22;border:1px solid #30363d;border-radius:10px;
-  width:min(900px,96vw);max-height:90vh;display:flex;flex-direction:column}
+  width:min(1200px,96vw);height:90vh;display:flex;flex-direction:column}
 .fb-header{padding:1rem 1.2rem;border-bottom:1px solid #30363d;display:flex;align-items:center;gap:.7rem}
 .fb-header h3{color:#f0f6fc;font-size:1rem;margin-right:auto}
 .breadcrumb{display:flex;align-items:center;gap:.3rem;flex-wrap:wrap;font-size:.8rem;color:#7d8590;flex:1}
@@ -1850,7 +1852,8 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
         <button class="btn bg-blue" onclick="edDownload()">&#8681;</button>
         <button class="btn bg-gray" onclick="edClose()">&#10005;</button>
       </div>
-      <textarea id="fb-ed-text" spellcheck="false" wrap="off"></textarea>
+      <div id="fb-ed-cm" class="fb-ed-cm"></div>
+      <textarea id="fb-ed-text" spellcheck="false" wrap="off" style="display:none"></textarea>
     </div>
     </div>
     <div class="fb-foot" id="fb-foot"></div>
@@ -1859,7 +1862,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
 
 <!-- Whitelist editor overlay -->
 <div class="overlay" id="wl-overlay">
-  <div class="fb-modal" style="width:min(640px,96vw)">
+  <div class="fb-modal" style="width:min(640px,96vw);height:auto;max-height:80vh">
     <div class="fb-header">
       <h3 id="wl-title">Whitelist</h3>
       <button class="btn bg-gray" onclick="closeWL()">&#10005;</button>
@@ -1880,6 +1883,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
   </div>
 </div>
 
+<script src="/static/editor.js" defer></script>
 <div class="flash" id="flash"></div>
 
 <script>
@@ -2795,9 +2799,7 @@ function fbUp() {
 
 function closeFB() {
   if (ed.dirty && !confirm('Discard unsaved changes?')) return;
-  ed.path = null; edMark(false);
-  document.getElementById('fb-ed-text').value = '';
-  document.getElementById('fb-modal').classList.remove('with-editor');
+  edReset();
   document.getElementById('fb-overlay').classList.remove('open');
 }
 
@@ -2865,7 +2867,16 @@ document.getElementById('fb-rows').addEventListener('change', ev => {
 
 // Built-in text editor: opens to the right of the file list for text-like files.
 const EDITABLE = /[.](properties|json|ya?ml|txt|log|cfg|conf|toml|ini|md|xml|csv|sh|mcmeta|lang|secret|env|bat|js|py)$/i;
-const ed = {path: null, dirty: false};
+const ed = {path: null, dirty: false, cm: null};
+
+function edText() { return ed.cm ? ed.cm.getValue() : document.getElementById('fb-ed-text').value; }
+
+function edReset() {
+  if (ed.cm) { ed.cm.destroy(); ed.cm = null; }
+  document.getElementById('fb-ed-text').value = '';
+  ed.path = null; edMark(false);
+  document.getElementById('fb-modal').classList.remove('with-editor');
+}
 
 function edMark(dirty) {
   ed.dirty = dirty;
@@ -2878,18 +2889,25 @@ async function edOpen(path) {
   if (r.error) { flash(r.error, true); return; }
   ed.path = path;
   document.getElementById('fb-ed-name').textContent = path;
-  const ta = document.getElementById('fb-ed-text');
-  ta.value = r.text;
-  ta.scrollTop = 0;
+  const ta = document.getElementById('fb-ed-text'), host = document.getElementById('fb-ed-cm');
+  if (ed.cm) { ed.cm.destroy(); ed.cm = null; }
+  host.textContent = '';
+  if (window.CCEditor) {     // CodeMirror; the plain textarea below is the fallback if the bundle failed to load
+    ta.style.display = 'none'; host.style.display = '';
+    ed.cm = CCEditor.create(host, {text: r.text, filename: path, onChange: () => edMark(true), onSave: edSave});
+  } else {
+    host.style.display = 'none'; ta.style.display = '';
+    ta.value = r.text; ta.scrollTop = 0;
+  }
   document.getElementById('fb-modal').classList.add('with-editor');
   edMark(false);
-  ta.focus();
+  (ed.cm || ta).focus();
 }
 
 async function edSave() {
   if (!ed.path) return;
   const r = await api('POST', `/api/${fb.sid}/filesave?path=${encodeURIComponent(ed.path)}`,
-                      {text: document.getElementById('fb-ed-text').value});
+                      {text: edText()});
   if (r.ok) { edMark(false); flash('Saved ' + ed.path.split('/').pop()); loadDir(fb.path); }
   else flash(r.error, true);
 }
@@ -2898,9 +2916,7 @@ function edDownload() { if (ed.path) dlFile(ed.path); }
 
 function edClose() {
   if (ed.dirty && !confirm('Discard unsaved changes?')) return;
-  ed.path = null; edMark(false);
-  document.getElementById('fb-ed-text').value = '';
-  document.getElementById('fb-modal').classList.remove('with-editor');
+  edReset();
 }
 
 document.getElementById('fb-ed-text').addEventListener('input', () => edMark(true));
@@ -3480,6 +3496,21 @@ class Handler(BaseHTTPRequestHandler):
                                       .replace("__JVM_ARGS__", default_jvm_args())
                                       .replace("__CSRF__", self.sess["csrf"])
                                       .replace("__ACCT__", _acct_html(self.sess["user"])))
+
+        if parts == ["static", "editor.js"]:     # bundled CodeMirror, served locally so the panel works offline
+            try:
+                with open(os.path.join(BASE_DIR, "static", "editor.js"), "rb") as f:
+                    data = f.read()
+            except OSError:
+                return self.send_json({"error": "not found"}, 404)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/javascript; charset=utf-8")
+            self.send_header("Content-Length", len(data))
+            self.send_header("Cache-Control", "private, max-age=3600")
+            self._security_headers()
+            self.end_headers()
+            self.wfile.write(data)
+            return
 
         if parts == ["2fa-setup"]:
             return self.send_html(render_2fa_setup(self.sess["user"]))

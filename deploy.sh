@@ -119,6 +119,10 @@ copy_if_different() {
 copy_if_different "$SCRIPT_DIR/creepercrest.py" "$TARGET_DIR/creepercrest.py" "creepercrest.py"
 copy_if_different "$SCRIPT_DIR/README.md"       "$TARGET_DIR/README.md"       "README.md"
 
+# Bundled editor (CodeMirror) - served locally so the panel works offline
+sudo mkdir -p "$TARGET_DIR/static"
+copy_if_different "$SCRIPT_DIR/static/editor.js" "$TARGET_DIR/static/editor.js" "static/editor.js"
+
 # Only copy config if one doesn't already exist - preserve existing settings
 if [ ! -f "$TARGET_DIR/config.json" ]; then
     copy_if_different "$SCRIPT_DIR/config.json" "$TARGET_DIR/config.json" "config.json"

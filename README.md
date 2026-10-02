@@ -1,24 +1,18 @@
 # CreeperCrest
 
-Lightweight Minecraft server management panel. No external dependencies - pure Python stdlib only.
+A small web panel for running Minecraft servers. One Python file, standard library only, works offline.
 
 ## Features
 
-- Start, stop, and restart servers
-- Live console output per server with command input
-- Memory (RAM) allocation per server
-- One-click backups - zipped and saved to `~/mc-backups`
-- Direct backup download from the browser
-- Add and remove servers via the web UI
-- Auto-refreshes every 5 seconds
+- Start, stop and restart servers, with a live console and command box
+- Setup wizard: pick Paper, Vanilla, Purpur or Fabric and a version, and the JAR is downloaded for you
+- File manager with a built-in code editor (syntax highlighting, find/replace, Ctrl+S)
+- Whitelist editor per server, with removal by UUID
+- Resource packs: upload or download one and CreeperCrest hosts it
+- One-click and scheduled backups, restore, per-server RAM and autostart
+- Login with password and 2FA
 
-## Requirements
-
-- Python 3.7+
-- Java (JRE/JDK) installed on the host
-- Run as a user that has read/write access to the server directories
-
-## Installation
+## Install
 
 ```bash
 git clone https://github.com/BeanGreen247/creepercrest
@@ -26,170 +20,80 @@ cd creepercrest
 sudo bash deploy.sh
 ```
 
-The deploy script will ask which user to run as, then:
+`deploy.sh` installs Python, OpenJDK and `ufw`, opens the firewall ports you choose, creates login users and installs a systemd service. It is safe to rerun: it keeps `config.json`, `users.json` and your servers, but it never deletes old firewall rules, so check `sudo ufw status numbered` afterwards.
 
-- installs Python 3, `qrencode` (QR codes for 2FA enrolment), OpenJDK (newest of 25/21/17 the distro offers, skipped if `java` already exists) and `ufw` on apt or dnf systems
-- configures `ufw`: allows SSH first (so you can't be locked out), the panel port (local network only by default, or anywhere), a Minecraft port range (default `25565-25575`), the Geyser/Bedrock UDP port (default `28258`, or `none`), and any port already used by your servers, then enables it
-- copies the files, installs and starts the systemd service
+Skip the firewall steps with `CC_SKIP_FIREWALL=1 sudo -E bash deploy.sh`. Open `http://<server-ip>:8888` when it finishes.
 
-If the firewall is managed elsewhere (for example by Ansible), skip every firewall step with `CC_SKIP_FIREWALL=1 sudo -E bash deploy.sh` or `sudo bash deploy.sh --skip-firewall`.
+Run it by hand with `python3 creepercrest.py`. Run it as the user that owns the server files.
 
-The panel port also serves resource packs to players, so it must be reachable from the machines that join your servers. The web UI has no login, so keep it on your local network unless you need outside players to receive resource packs.
+## Ports
 
-**Manual file placement (optional):**
-```bash
-sudo cp -r creepercrest /home/crafty/creepercrest
-sudo chown -R crafty:crafty /home/crafty/creepercrest
-```
+| Port | Purpose |
+|------|---------|
+| 8888/tcp | Panel and resource-pack downloads. Keep it on your LAN. |
+| 25565/tcp | Java servers (one per server) |
+| Geyser UDP (default 28258) | Bedrock players |
 
-## Running
+Players outside your network need the panel port to download a resource pack, so for them either host the pack elsewhere or reach the panel over a VPN.
 
-**Manually:**
-```bash
-sudo -u crafty python3 /home/crafty/creepercrest/creepercrest.py
-```
+## Server protection
 
-**As a systemd service (runs on boot):**
+Every time a server starts, CreeperCrest enforces:
 
-```bash
-sudo cp creepercrest.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now creepercrest
-sudo systemctl status creepercrest
-```
+- `white-list=true`, `enforce-whitelist=true`, `online-mode=true`
+- query and RCON off
+- a 5 second login throttle per IP in `bukkit.yml` (Paper and Spigot)
 
-Then open `http://<your-server-ip>:8888` in a browser.
+Anyone refused by the whitelist is banned by name, and by IP when the address is public. LAN and proxy addresses are never IP-banned. Add players from the **Whitelist** button on the server card. The server must be running to add; removing works any time.
 
-## Configuration
-
-`config.json` is created automatically on first run. Edit it to change the port, host, or backup directory.
-
-```json
-{
-  "host": "0.0.0.0",
-  "port": 8888,
-  "backup_dir": "~/mc-backups",
-  "refresh_interval": 5,
-  "servers": {}
-}
-```
-
-| Key | Description |
-|-----|-------------|
-| `host` | Interface to listen on. `0.0.0.0` = all interfaces |
-| `port` | Web UI port |
-| `backup_dir` | Where zip backups are saved. `~` resolves to the running user's home |
-| `max_backups` | Backups kept per server; oldest are deleted after each backup. `0` = unlimited (default), otherwise 3-28 (editable under Backups > Edit Schedule) |
-| `lan_mode` | `true` = no login for private-network clients (see Security) |
-| `trusted_proxies` | Reverse-proxy addresses whose `X-Forwarded-For` is trusted |
-| `tls_cert` / `tls_key` | Serve HTTPS directly from these files |
-| `allowed_hosts` | Extra hostnames accepted in LAN mode |
-| `auth_disabled` | Set `true` to turn the login off (not recommended) |
-| `refresh_interval` | How often the UI polls for status updates, in seconds (default: `5`) |
-| `servers` | Managed automatically by the UI - do not edit by hand |
-
-## Security
-
-CreeperCrest is a remote-control panel: anyone who can sign in can run commands on the host through the Minecraft console, upload JARs and set Java arguments. Treat a login as full access to the machine's service user.
-
-**Built in**
-- Password + TOTP 2FA, scrypt hashing, login throttling, replay-proof codes, 8 h idle / 24 h sessions, `HttpOnly` + `SameSite=Strict` cookies (`Secure` over HTTPS).
-- CSRF token on every state-changing request, plus an `Origin` check; security headers (`CSP`, `X-Frame-Options`, `nosniff`, `Referrer-Policy: same-origin`, HSTS over HTTPS).
-- File access is confined to each server's directory (symlink-safe); backup names are validated; server IDs are restricted; file names are never placed in inline JavaScript.
-- Resource-pack downloads from a URL refuse private/internal addresses (SSRF guard) unless LAN mode or `allow_private_fetch` is on.
-- Idle connections are dropped after 60 s; request bodies are capped (2 GB uploads, 1 MB JSON). The service unit sets `NoNewPrivileges` and friends.
-
-**Putting it on the internet**
-1. Prefer a VPN (Tailscale/WireGuard) over opening the port at all.
-2. Otherwise serve it over HTTPS: put it behind a reverse proxy (Caddy/nginx) that sets `X-Forwarded-Proto: https` and `X-Forwarded-For`, and set `"trusted_proxies": ["127.0.0.1"]` so login throttling sees real client addresses. Or terminate TLS in the app with `"tls_cert"` / `"tls_key"` in `config.json`.
-3. Open only that HTTPS port (`CC_SKIP_FIREWALL=1` if you manage the firewall yourself) and keep the panel port itself LAN-only.
-4. Use strong, unique passwords. Remove users you no longer need (`--remove-user`).
-
-**LAN mode (no login on a private network)**
-
-For an isolated home/LAN setup you can skip accounts entirely:
-
-```bash
-python3 creepercrest.py lan-mode on     # then restart; "off" to disable
-```
-
-Requests from private or loopback addresses (192.168.x, 10.x, 172.16-31.x, localhost) are let in without a login. Requests from any other address, or that arrive through a proxy (`X-Forwarded-For` etc.), or with a hostname that is not an IP / `localhost` / the machine name / `*.local` / in `"allowed_hosts"`, still need a login. The CSRF and cross-origin protections stay on. Do not port-forward the panel while LAN mode is on: a request forwarded straight through your router still arrives from a public address and would be asked to sign in, but a proxy on your LAN would not be recognised as outside unless it sends the usual forwarding headers.
+The whitelist matches the account UUID, so a hijacked account still gets in. If a friend's account is compromised, remove their UUID from the whitelist and ban the account until they have recovered it.
 
 ## Login and 2FA
 
-The panel is locked behind a username, password and a 6-digit authenticator code (Google Authenticator, Authy, any TOTP app). Until at least one user exists it shows a "setup required" page.
-
-Manage users on the server (stdlib only, nothing to install):
+The panel is locked until a user exists. Manage users on the host:
 
 ```bash
-python3 creepercrest.py adduser <name>     # generates a password + 2FA key, shown once
-python3 creepercrest.py adduser <name> --prompt   # choose your own password instead
-python3 creepercrest.py passwd <name>      # new generated password
-python3 creepercrest.py reset-2fa <name>   # new 2FA key (re-enrol the app)
-python3 creepercrest.py deluser <name>      # also: --remove-user <name>; add --yes to skip the prompt
+python3 creepercrest.py adduser <name>      # prints a generated password and 2FA key once
+python3 creepercrest.py passwd <name>
+python3 creepercrest.py reset-2fa <name>
+python3 creepercrest.py deluser <name>
 python3 creepercrest.py users
 ```
 
-The 2FA key is printed with an `otpauth://` URI. Install `qrencode` to also get a QR code in the terminal; add the optional `qrcode` Python module to show one on the panel's **2FA** page. Otherwise enter the key manually in your app.
+Passwords are hashed with scrypt, logins are throttled, sessions last 8 h idle, and every state-changing request carries a CSRF token. The only public URL is `/resourcepack/<id>.zip`, because Minecraft clients cannot log in. Install `qrencode` or the Python `qrcode` module to get a QR code for enrolment.
 
-- Users live in `users.json` next to `config.json` (mode 600, passwords hashed with scrypt, ignored by git).
-- Sessions are in memory, last 8 h idle / 24 h total, and are cleared on restart.
-- 5 failed logins from one address, or 10 for one username, lock sign-in for 15 minutes. A used authenticator code cannot be replayed.
-- State-changing requests need a CSRF token; logins and changes are logged to the console / journal (`[auth]`, `[audit]`).
-- The only public URL is `/resourcepack/<id>.zip`, because Minecraft clients cannot log in.
-- Serving over plain HTTP sends the session cookie unencrypted - put the panel behind HTTPS (a reverse proxy that sets `X-Forwarded-Proto: https` makes the cookie `Secure`) or keep it on a trusted network.
-- To run without a login (not recommended) set `"auth_disabled": true` in `config.json`.
+**LAN mode** (`python3 creepercrest.py lan-mode on`) skips the login for private-network clients. Never port-forward the panel while it is on.
 
-## Adding a Server
+**On the internet:** prefer a VPN. Otherwise serve it over HTTPS, either behind a reverse proxy that sets `X-Forwarded-Proto` and `X-Forwarded-For` (then set `trusted_proxies`), or with `tls_cert` / `tls_key` in `config.json`.
 
-1. Open the web UI
-2. Click **+ Add Server**
-3. Fill in the fields:
+## Configuration
 
-| Field | Description |
-|-------|-------------|
-| ID | Short identifier, e.g. `survival` |
-| Display Name | Name shown in the UI |
-| Server Directory | Full path to the folder containing the JAR |
-| JAR filename | Usually `server.jar` or `paper.jar` |
-| Min RAM (MB) | Minimum RAM allocated with `-Xms` |
-| Max RAM (MB) | Maximum RAM allocated with `-Xmx` |
-| Extra JVM args | G1GC flags etc. - safe to leave as default |
-| Download server JAR | Optional; pick Paper, Vanilla, Purpur or Fabric plus a Minecraft version and CreeperCrest downloads the JAR into the server directory |
-| World seed | Optional; written to `level-seed` in `server.properties` (new worlds only) |
-| Resource pack URL / SHA-1 | Optional; written to `resource-pack` / `resource-pack-sha1` in `server.properties`, also editable per server |
+`config.json` is created on first run.
 
-## Backups
+| Key | Description |
+|-----|-------------|
+| `host`, `port` | Listen address and port (default `0.0.0.0:8888`) |
+| `backup_dir` | Backup folder (default `~/mc-backups`) |
+| `max_backups` | Backups kept per server, `0` = unlimited |
+| `lan_mode` | No login for private-network clients |
+| `trusted_proxies`, `allowed_hosts` | Reverse-proxy and hostname allow-lists |
+| `tls_cert`, `tls_key` | Serve HTTPS directly |
+| `refresh_interval` | UI refresh in seconds (default `5`) |
+| `auth_disabled` | Turn the login off (not recommended) |
 
-Clicking **Backup** on a server card:
+`servers` is managed by the UI.
 
-- Zips the entire server directory (skips `logs/` and `crash-reports/` to save space)
-- Saves the zip to `~/mc-backups/<server-id>-YYYYMMDD-HHMMSS.zip`
-- The zip appears in the **Backups** section with a **Download** link
-- The server does not need to be stopped to take a backup
-
-## File Layout
+## Files
 
 ```
-creepercrest/
-├── creepercrest.py      # everything - web server, process manager, backup logic
-├── creepercrest.service # systemd service template (User=crafty)
-├── deploy.sh            # interactive install script
-├── config.json          # auto-managed, edit only host/port/backup_dir
-└── README.md
+creepercrest.py        web server, process manager, backups
+static/editor.js       bundled CodeMirror editor (see static/LICENSES.md)
+deploy.sh              installer
+creepercrest.service   systemd unit template
+config.json            settings
 ```
 
-Backups are stored outside this directory at `~/mc-backups/` (configurable).
-
-## Stopping CreeperCrest
-
-If running manually: `Ctrl+C` - all running Minecraft servers are sent the `stop` command before exit.
-
-If running as a service: `sudo systemctl stop creepercrest`
-
-## Permissions Note
-
-CreeperCrest must run as the same user that owns the server files. If your servers were previously managed by Crafty Controller they are likely owned by the `crafty` user - run CreeperCrest as `crafty` (see systemd service above).
+Backups are stored outside the project, in `~/mc-backups`.
 
 ## Support
 
