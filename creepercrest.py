@@ -237,6 +237,93 @@ def _set_properties(directory, updates):
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
+CONNECTION_THROTTLE_MS = 5000    # Bukkit/Paper: min ms between logins from one IP (default 4000); keep low, remote players may share a tunnel IP
+
+def _harden_server(directory):
+    """Force whitelist + online mode + login throttling before every start."""
+    directory = os.path.expanduser(directory)
+    _set_properties(directory, {
+        "white-list":               "true",
+        "enforce-whitelist":        "true",
+        "online-mode":              "true",
+        "enable-query":             "false",
+        "enable-rcon":              "false",
+    })
+    path = os.path.join(directory, "bukkit.yml")
+    line = f"  connection-throttle: {CONNECTION_THROTTLE_MS}"
+    try:
+        text = open(path, encoding="utf-8").read() if os.path.isfile(path) else ""
+        if re.search(r"^\s*connection-throttle:", text, re.M):
+            text = re.sub(r"^\s*connection-throttle:.*$", line, text, flags=re.M)
+        elif re.search(r"^settings:\s*$", text, re.M):
+            text = re.sub(r"^settings:\s*$", "settings:\n" + line, text, count=1, flags=re.M)
+        else:
+            text += ("\n" if text and not text.endswith("\n") else "") + "settings:\n" + line + "\n"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+    except OSError:
+        pass
+
+_PLAYER_RE = re.compile(r"[A-Za-z0-9_.]{1,32}")
+
+_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}")
+
+def _whitelist_path(srv):
+    return os.path.join(os.path.expanduser(srv.cfg.get("directory", "")), "whitelist.json")
+
+def whitelist_entries(srv):
+    try:
+        with open(_whitelist_path(srv), encoding="utf-8") as f:
+            return sorted(({"name": e.get("name", ""), "uuid": e.get("uuid", "")} for e in json.load(f)
+                           if e.get("name") or e.get("uuid")), key=lambda e: e["name"].lower())
+    except (OSError, ValueError, AttributeError):
+        return []
+
+def whitelist_remove_uuid(srv, uuid_str):
+    """Drop a UUID from whitelist.json (works while stopped; a running server is told to reload and kicks them)."""
+    want = uuid_str.replace("-", "").lower()
+    path = _whitelist_path(srv)
+    try:
+        with open(path, encoding="utf-8") as f:
+            entries = json.load(f)
+    except (OSError, ValueError):
+        return False, "No whitelist.json to edit"
+    kept = [e for e in entries if str(e.get("uuid", "")).replace("-", "").lower() != want]
+    if len(kept) == len(entries):
+        return False, "That UUID is not on the whitelist"
+    tmp = path + ".part"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(kept, f, indent=2)
+    os.replace(tmp, path)
+    if srv.is_running():
+        srv.send_command("whitelist reload")
+    return True, "Removed"
+
+_NOT_WL_RE = re.compile(r"not\s+white-?listed", re.I)
+_ADDR_RE   = re.compile(r"/((?:\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F:]{3,39}):\d+")
+_NAME_RES  = (re.compile(r"name=([A-Za-z0-9_.]{1,32})[,)]"),
+              re.compile(r"Disconnecting ([A-Za-z0-9_.]{1,32}) \("),
+              re.compile(r"([A-Za-z0-9_.]{1,32})\[/[^\]]+\] lost connection"))
+
+def _check_not_whitelisted(srv, line):
+    """Auto-ban a name (always) and its IP (public IPs only) when it is refused by the whitelist."""
+    if not _NOT_WL_RE.search(line):
+        return
+    name = next((m.group(1) for r in _NAME_RES if (m := r.search(line))), None)
+    m = _ADDR_RE.search(line)
+    ip = m.group(1) if m else None
+    if name and name not in srv._banned:
+        srv._banned.add(name)
+        srv.send_command(f"ban {name} Not whitelisted")
+    if ip and ip not in srv._banned:
+        try:
+            a = ipaddress.ip_address(ip)
+        except ValueError:
+            return
+        if a.is_global:     # never ban a LAN/proxy address: that would lock out every player behind it
+            srv._banned.add(ip)
+            srv.send_command(f"ban-ip {ip} Not whitelisted")
+
 def _check_pack(url, sha1, prompt=""):
     if re.search(r"[\r\n]", prompt) or len(prompt) > 256:
         return "Resource pack prompt must be one line, 256 characters or fewer"
@@ -495,6 +582,7 @@ class ManagedServer:
         self.logs    = deque(maxlen=300)
         self.log_seq = 0
         self._lock   = threading.Lock()
+        self._banned = set()
 
     def is_running(self):
         return self.process is not None and self.process.poll() is None
@@ -518,6 +606,10 @@ class ManagedServer:
                 + extra
                 + ["-jar", jar_path, "--nogui"]
             )
+            try:
+                _harden_server(directory)
+            except OSError as e:
+                return False, f"failed to harden server config: {e}"
             try:
                 self.process = subprocess.Popen(
                     cmd, cwd=directory,
@@ -576,6 +668,7 @@ class ManagedServer:
         try:
             for line in self.process.stdout:
                 self._append(line.rstrip())
+                _check_not_whitelisted(self, line)
         except Exception:
             pass
 
@@ -1217,6 +1310,7 @@ section+section{margin-top:2.2rem}
 .cmd-row input[type=text]{flex:1;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;
   padding:.3rem .55rem;border-radius:5px;font-size:.83rem;font-family:monospace;outline:none}
 .cmd-row input[type=text]:focus{border-color:#58a6ff}
+.wl-list{margin-top:.4rem;font-size:.8rem;color:#8b949e;word-break:break-word}
 
 /* ── Backups ── */
 .backup-row{display:flex;align-items:center;gap:1rem;padding:.6rem .9rem;
@@ -1923,6 +2017,13 @@ function cardHTML(s) {
         onkeydown="if(event.key==='Enter')sendCmd('${s.id}')"/>
       <button class="btn bg-gray" onclick="sendCmd('${s.id}')">Send</button>
     </div>
+    <div class="cmd-row" id="wl-${s.id}">
+      <input type="text" id="wlin-${s.id}" placeholder="Player name (or UUID to remove)" maxlength="36"
+        onkeydown="if(event.key==='Enter')wlChange('${s.id}','add')"/>
+      <button class="btn bg-gray" onclick="wlChange('${s.id}','add')">Whitelist</button>
+      <button class="btn bg-gray" onclick="wlChange('${s.id}','remove')">Remove</button>
+    </div>
+    <div class="wl-list" id="wllist-${s.id}"></div>
   </div>
 </div>`;
 }
@@ -2110,6 +2211,37 @@ async function sendCmd(sid) {
   fetchLogs(sid);
 }
 
+async function wlLoad(sid) {
+  const el = document.getElementById(`wllist-${sid}`);
+  if (!el) return;
+  const r = await api('GET', `/api/${sid}/whitelist`);
+  el.textContent = '';
+  if (!r.entries) return;
+  el.append('Whitelisted (click a name to fill in its UUID for removal): ');
+  if (!r.entries.length) el.append('nobody yet');
+  r.entries.forEach((e, i) => {
+    const a = document.createElement('a');
+    a.textContent = e.name || e.uuid;
+    a.title = e.uuid;
+    a.style.cursor = 'pointer';
+    a.onclick = () => { document.getElementById(`wlin-${sid}`).value = e.uuid; };
+    if (i) el.append(', ');
+    el.append(a);
+  });
+}
+
+async function wlChange(sid, op) {
+  const inp = document.getElementById(`wlin-${sid}`);
+  const name = inp.value.trim();
+  const isUuid = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i.test(name);
+  if (!/^[A-Za-z0-9_.]{1,32}$/.test(name) && !(op === 'remove' && isUuid)) { flash('Enter a valid player name' + (op === 'remove' ? ' or UUID' : ''), true); return; }
+  const r = await api('POST', `/api/${sid}/whitelist`, {name, op});
+  if (!r.ok) { flash(r.msg || r.error, true); return; }
+  flash(op === 'add' ? `${name} whitelisted` : `${name} removed from whitelist`);
+  inp.value = '';
+  setTimeout(() => wlLoad(sid), 800);
+}
+
 const _logSeq = {};
 
 async function fetchLogs(sid) {
@@ -2130,7 +2262,7 @@ async function fetchLogs(sid) {
 }
 
 function fetchAllLogs(list) {
-  for (const s of list) fetchLogs(s.id);
+  for (const s of list) { fetchLogs(s.id); wlLoad(s.id); }
 }
 
 async function toggleAutostart(sid, current) {
@@ -2177,7 +2309,7 @@ const WZ_PROPS = [
   {k:'online-mode', l:'Online mode (verify accounts with Mojang)', t:'bool', d:true},
   {k:'pvp', l:'Player vs player', t:'bool', d:true},
   {k:'hardcore', l:'Hardcore', t:'bool', d:false},
-  {k:'white-list', l:'Whitelist', t:'bool', d:false},
+  {k:'white-list', l:'Whitelist', t:'bool', d:true},
   {k:'allow-nether', l:'Allow the Nether', t:'bool', d:true},
   {k:'allow-flight', l:'Allow flight', t:'bool', d:false},
   {k:'enable-command-block', l:'Command blocks', t:'bool', d:false},
@@ -3252,6 +3384,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"logs": lines, "seq": seq, "full": True})
             return self.send_json({"logs": lines[len(lines) - new:] if new else [], "seq": seq, "full": False})
 
+        if len(parts) == 3 and parts[0] == "api" and parts[2] == "whitelist":
+            if parts[1] not in servers:
+                return self.send_json({"error": "not found"}, 404)
+            return self.send_json({"entries": whitelist_entries(servers[parts[1]])})
+
         # /api/{id}/files?path=
         if len(parts) == 3 and parts[0] == "api" and parts[2] == "files":
             sid = parts[1]
@@ -3685,6 +3822,19 @@ class Handler(BaseHTTPRequestHandler):
                 ok, msg = srv.restart()
             elif action == "command":
                 ok, msg = srv.send_command(b.get("command", ""))
+            elif action == "whitelist":
+                name, op = str(b.get("name", "")).strip(), b.get("op")
+                if op == "remove" and _UUID_RE.fullmatch(name):
+                    ok, msg = whitelist_remove_uuid(srv, name)
+                    return self.send_json({"ok": ok, "msg": msg}, 200 if ok else 400)
+                if op not in ("add", "remove") or not _PLAYER_RE.fullmatch(name):
+                    return self.send_json({"error": "invalid player name"}, 400)
+                if op == "add":
+                    srv._banned.discard(name)
+                    srv.send_command(f"pardon {name}")     # lift an auto-ban from an earlier attempt
+                ok, msg = srv.send_command(f"whitelist {op} {name}")
+                if not ok:
+                    msg = "Start the server first to change its whitelist"
             elif action == "backup":
                 return self.send_json({"ok": True, "job": start_job(
                     "Creating backup...", lambda job: _expect_ok(do_backup(sid, job)))})
