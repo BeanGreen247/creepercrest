@@ -74,7 +74,7 @@ pick_jdk() {
 }
 
 if [ -z "$PKG" ]; then
-    echo "  Unsupported package manager - make sure python3, OpenJDK and ufw are installed."
+    echo "  Unsupported package manager - make sure python3, python3-qrcode, python3-qrcodegen, OpenJDK and ufw are installed."
 else
     command -v python3 &>/dev/null || { echo "  Installing python3..."; pkg_install python3; }
 
@@ -87,6 +87,8 @@ else
     fi
 
     command -v qrencode &>/dev/null || { echo "  Installing qrencode (QR codes for 2FA enrolment)..."; pkg_install qrencode || true; }
+    command -v python3-qrcode &>/dev/null || { echo "  Installing python3-qrcode (QR code for 2FA python module)..."; pkg_install python3-qrcode || true; }
+    command -v python3-qrcodegen &>/dev/null || { echo "  Installing python3-qrcodegen (QR code generator for 2FA python module)..."; pkg_install python3-qrcodegen || true; }
 
     if [ "$SKIP_FW" = 1 ]; then
         echo "  ufw   → skipped (CC_SKIP_FIREWALL)"
