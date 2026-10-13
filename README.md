@@ -6,7 +6,7 @@ A small web panel for running Minecraft servers. One Python file, standard libra
 
 - Start, stop and restart servers, with a live console and command box
 - Setup wizard: pick Paper, Vanilla, Purpur or Fabric and a version, and the JAR is downloaded for you
-- Runtime per server: Java JAR, or a native binary such as [Painite](https://github.com/BeanGreen247/painite) (choose it in the wizard, or switch it later in Edit)
+- Runtime per server: Java JAR, or a native binary such as [Painite](https://github.com/BeanGreen247/painite) (choose it in the wizard, or switch it later in Edit; a Browse button next to the JAR/binary field fills in the full path)
 - File manager with a built-in code editor (syntax highlighting, find/replace, Ctrl+S)
 - Whitelist editor per server, with removal by UUID
 - Resource packs: upload or download one and CreeperCrest hosts it

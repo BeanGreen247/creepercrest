@@ -516,14 +516,18 @@ def validate_props(raw):
             out[k] = _bool(v)
     return out, None
 
-def list_dirs(path):
+def list_dirs(path, files=False):
     path = os.path.abspath(os.path.expanduser(path or "~"))
     if not os.path.isdir(path):
         raise ValueError("not a directory")
-    names = sorted((n for n in os.listdir(path)
-                    if not n.startswith(".") and os.path.isdir(os.path.join(path, n))), key=str.lower)
-    return {"path": path, "parent": os.path.dirname(path) if path != os.path.dirname(path) else None,
-            "dirs": names, "home": os.path.expanduser("~")}
+    entries = [n for n in os.listdir(path) if not n.startswith(".")]
+    names = sorted((n for n in entries if os.path.isdir(os.path.join(path, n))), key=str.lower)
+    out = {"path": path, "parent": os.path.dirname(path) if path != os.path.dirname(path) else None,
+           "dirs": names, "home": os.path.expanduser("~")}
+    if files:
+        fl = sorted((n for n in entries if os.path.isfile(os.path.join(path, n))), key=str.lower)[:2000]
+        out["files"] = [{"n": n, "x": os.access(os.path.join(path, n), os.X_OK)} for n in fl]
+    return out
 
 # ── Server JAR providers ───────────────────────────────────────────────────────
 
@@ -1577,7 +1581,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
     </div>
     <div class="frow"><label>Server Directory (full path)</label><input id="f-dir" placeholder="/home/crafty/servers/survival"/></div>
     <div class="frow"><label>Runtime</label><select id="f-runtime" onchange="rtChange('f')"><option value="java">Java (JAR)</option><option value="native">Native binary (e.g. Painite)</option></select></div>
-    <div class="frow"><label>JAR filename</label><input id="f-jar" value="server.jar"/></div>
+    <div class="frow"><label>JAR filename</label><div style="display:flex;gap:.5rem"><input id="f-jar" value="server.jar"/><button class="btn bg-teal" type="button" onclick="dpFile('f')">&#128193; Browse</button></div></div>
     <div class="frow-2">
       <div class="frow"><label>Min RAM (MB)</label><input id="f-min" type="number" value="512" min="256" step="256"/></div>
       <div class="frow"><label>Max RAM (MB)</label><input id="f-max" type="number" value="2048" min="256" step="256"/></div>
@@ -1652,7 +1656,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
           <input type="file" id="wz-jar-file" accept=".jar" onchange="wzJarChosen(this)"/>
         </div>
       </div>
-      <div class="frow"><label>JAR filename</label><input id="wz-jar" value="server.jar"/></div>
+      <div class="frow"><label>JAR filename</label><div style="display:flex;gap:.5rem"><input id="wz-jar" value="server.jar"/><button class="btn bg-teal" type="button" onclick="dpFile('wz')">&#128193; Browse</button></div></div>
       <p id="wz-java-warn" style="display:none;font-size:.8rem;color:#e3b341;background:#2a2108;border:1px solid #9e6a03;border-radius:8px;padding:.5rem .7rem;margin-top:.4rem"></p>
     </div>
 
@@ -1689,14 +1693,14 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
 <!-- Folder picker -->
 <div class="overlay" id="dp-overlay" style="z-index:300">
   <div class="modal" style="width:min(560px,94vw)">
-    <h3>Choose a folder</h3>
+    <h3 id="dp-title">Choose a folder</h3>
     <div class="breadcrumb" id="dp-path" style="margin-bottom:.6rem;word-break:break-all"></div>
     <div id="dp-list" class="dp-list"></div>
     <div class="modal-btns" style="justify-content:space-between">
-      <button class="btn bg-gray" onclick="dpNew()">&#10133; New folder</button>
+      <button class="btn bg-gray" id="dp-new" onclick="dpNew()">&#10133; New folder</button>
       <span style="display:flex;gap:.5rem">
         <button class="btn bg-gray" onclick="dpClose()">Cancel</button>
-        <button class="btn bg-green" onclick="dpSelect()">Select this folder</button>
+        <button class="btn bg-green" id="dp-sel" onclick="dpSelect()">Select this folder</button>
       </span>
     </div>
   </div>
@@ -1719,7 +1723,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
     </div>
     <div class="frow"><label>Extract to Directory (full path)</label><input id="fi-dir" placeholder="/home/crafty/servers/survival"/></div>
     <div class="frow"><label>Runtime</label><select id="fi-runtime" onchange="rtChange('fi')"><option value="java">Java (JAR)</option><option value="native">Native binary (e.g. Painite)</option></select></div>
-    <div class="frow"><label>JAR filename</label><input id="fi-jar" value="server.jar"/></div>
+    <div class="frow"><label>JAR filename</label><div style="display:flex;gap:.5rem"><input id="fi-jar" value="server.jar"/><button class="btn bg-teal" type="button" onclick="dpFile('fi')">&#128193; Browse</button></div></div>
     <div class="frow-2">
       <div class="frow"><label>Min RAM (MB)</label><input id="fi-min" type="number" value="512" min="256" step="256"/></div>
       <div class="frow"><label>Max RAM (MB)</label><input id="fi-max" type="number" value="2048" min="256" step="256"/></div>
@@ -1766,7 +1770,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
     </div>
     <div class="frow"><label>Server Directory (full path)</label><input id="cfb-dir" placeholder="/home/crafty/servers/survival"/></div>
     <div class="frow"><label>Runtime</label><select id="cfb-runtime" onchange="rtChange('cfb')"><option value="java">Java (JAR)</option><option value="native">Native binary (e.g. Painite)</option></select></div>
-    <div class="frow"><label>JAR filename</label><input id="cfb-jar" value="server.jar"/></div>
+    <div class="frow"><label>JAR filename</label><div style="display:flex;gap:.5rem"><input id="cfb-jar" value="server.jar"/><button class="btn bg-teal" type="button" onclick="dpFile('cfb')">&#128193; Browse</button></div></div>
     <div class="frow-2">
       <div class="frow"><label>Min RAM (MB)</label><input id="cfb-min" type="number" value="512" min="256" step="256"/></div>
       <div class="frow"><label>Max RAM (MB)</label><input id="cfb-max" type="number" value="2048" min="256" step="256"/></div>
@@ -2595,26 +2599,59 @@ async function wzCreate() {
 
 // ── Folder picker ──────────────────────────────────────────────────────────────
 
-let _dpPath = '', _dpParent = null;
+let _dpPath = '', _dpParent = null, _dpMode = 'dir', _dpPrefix = 'wz';
+
+function dpMode(mode, title) {
+  _dpMode = mode;
+  document.getElementById('dp-title').textContent = title;
+  document.getElementById('dp-new').style.display = mode === 'dir' ? '' : 'none';
+  document.getElementById('dp-sel').style.display = mode === 'dir' ? '' : 'none';
+}
 
 function dpOpen() {
+  dpMode('dir', 'Choose a folder');
   document.getElementById('dp-overlay').classList.add('open');
   dpLoad(document.getElementById('wz-dir').value.trim() || '~');
+}
+
+// File mode: fills the form's JAR / binary field with the full path of the clicked file.
+function dpFile(pfx) {
+  _dpPrefix = pfx;
+  const native = document.getElementById(pfx + '-runtime').value === 'native';
+  dpMode('file', native ? 'Choose the server binary' : 'Choose the server JAR');
+  const cur = document.getElementById(pfx + '-jar').value.trim();
+  const dir = document.getElementById(pfx + '-dir').value.trim();
+  const start = cur.startsWith('/') ? (cur.replace(/[/][^/]*$/, '') || '/') : (dir || '~');
+  document.getElementById('dp-overlay').classList.add('open');
+  dpLoad(start);
+}
+
+function dpPick(full) {
+  document.getElementById(_dpPrefix + '-jar').value = full;
+  if (_dpPrefix === 'wz') { document.getElementById('wz-jtype').value = ''; wzLoadVersions(); }   // an existing file, nothing to download
+  dpClose();
 }
 function dpClose() { document.getElementById('dp-overlay').classList.remove('open'); }
 
 async function dpLoad(path) {
-  let r = await api('GET', '/api/browse?path=' + encodeURIComponent(path));
-  if (r.error) r = await api('GET', '/api/browse?path=~');   // typed path does not exist yet
+  const q = _dpMode === 'file' ? '&files=1' : '';
+  let r = await api('GET', '/api/browse?path=' + encodeURIComponent(path) + q);
+  if (r.error) r = await api('GET', '/api/browse?path=~' + q);   // typed path does not exist yet
   if (r.error) { flash(r.error, true); return; }
   _dpPath = r.path; _dpParent = r.parent;
   document.getElementById('dp-path').textContent = r.path;
   const rows = [];
   if (r.parent) rows.push(`<div class="dp-item" data-p="${esc(r.parent)}">&#8593; ..</div>`);
-  r.dirs.forEach(n => rows.push(`<div class="dp-item" data-p="${esc((r.path.endsWith('/') ? r.path : r.path + '/') + n)}">&#128193; ${esc(n)}</div>`));
+  const base = r.path.endsWith('/') ? r.path : r.path + '/';
+  r.dirs.forEach(n => rows.push(`<div class="dp-item" data-p="${esc(base + n)}">&#128193; ${esc(n)}</div>`));
+  if (_dpMode === 'file') {
+    const native = document.getElementById(_dpPrefix + '-runtime').value === 'native';
+    (r.files || []).filter(f => native || f.n.toLowerCase().endsWith('.jar'))
+      .forEach(f => rows.push(`<div class="dp-item" data-f="${esc(base + f.n)}">${f.x ? '&#9881;' : '&#128196;'} ${esc(f.n)}</div>`));
+  }
   const list = document.getElementById('dp-list');
-  list.innerHTML = rows.join('') || '<div class="dp-empty">No sub-folders</div>';
-  list.querySelectorAll('.dp-item').forEach(el => el.onclick = () => dpLoad(el.dataset.p));
+  list.innerHTML = rows.join('') || `<div class="dp-empty">${_dpMode === 'file' ? 'No folders or matching files' : 'No sub-folders'}</div>`;
+  list.querySelectorAll('.dp-item').forEach(el => el.onclick = () => el.dataset.f ? dpPick(el.dataset.f) : dpLoad(el.dataset.p));
 }
 
 async function dpNew() {
@@ -2634,7 +2671,7 @@ function dpSelect() {
 function rtChange(p) {
   const native = document.getElementById(p + '-runtime').value === 'native';
   const jar = document.getElementById(p + '-jar');
-  jar.previousElementSibling.textContent = native ? 'Binary filename or full path (e.g. painite)' : 'JAR filename';
+  jar.closest('.frow').querySelector('label').textContent = native ? 'Binary filename or full path (e.g. painite)' : 'JAR filename';
   if (native && jar.value === 'server.jar') jar.value = 'painite';
   if (!native && jar.value === 'painite') jar.value = 'server.jar';
   ['min', 'max'].forEach(k => { const e = document.getElementById(p + '-' + k); if (e) e.disabled = native; });
@@ -3667,7 +3704,7 @@ class Handler(BaseHTTPRequestHandler):
         # /api/browse?path=  - list sub-directories (folder picker)
         if parts == ["api", "browse"]:
             try:
-                return self.send_json(list_dirs(unquote(self.qs().get("path", ["~"])[0])))
+                return self.send_json(list_dirs(unquote(self.qs().get("path", ["~"])[0]), self.qs().get("files", ["0"])[0] == "1"))
             except (OSError, ValueError) as e:
                 return self.send_json({"error": str(e)}, 400)
 
