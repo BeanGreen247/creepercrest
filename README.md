@@ -102,3 +102,7 @@ If this project is useful to you, consider supporting its development via PayPal
 [![Donate with PayPal](.github/paypal-qr.png)](https://paypal.me/beangreen2471)
 
 **PayPal:** https://paypal.me/beangreen2471
+
+## License
+
+Source-available, all rights reserved. Read, build and run for personal use; no forks, redistribution or derivative works. See `LICENSE`.
