@@ -240,16 +240,20 @@ def _set_properties(directory, updates):
 
 CONNECTION_THROTTLE_MS = 5000    # Bukkit/Paper: min ms between logins from one IP (default 4000); keep low, remote players may share a tunnel IP
 
-def _harden_server(directory):
-    """Force whitelist + online mode + login throttling before every start."""
+def _harden_server(directory, allow_offline=False):
+    """Force whitelist + online mode + login throttling before every start.
+    allow_offline (per-server opt-in) leaves online-mode as the owner set it, for cracked clients."""
     directory = os.path.expanduser(directory)
-    _set_properties(directory, {
+    forced = {
         "white-list":               "true",
         "enforce-whitelist":        "true",
         "online-mode":              "true",
         "enable-query":             "false",
         "enable-rcon":              "false",
-    })
+    }
+    if allow_offline:
+        del forced["online-mode"]
+    _set_properties(directory, forced)
     path = os.path.join(directory, "bukkit.yml")
     line = f"  connection-throttle: {CONNECTION_THROTTLE_MS}"
     try:
@@ -600,15 +604,23 @@ class ManagedServer:
             max_mem   = int(self.cfg.get("memory_max_mb", legacy))
             extra     = self.cfg.get("extra_args", "").split()
             jar_path  = jar if os.path.isabs(jar) else os.path.join(directory, jar)
-            if not os.path.isfile(jar_path):
-                return False, f"JAR not found: {jar_path}"
-            cmd = (
-                ["java", f"-Xms{min_mem}M", f"-Xmx{max_mem}M"]
-                + extra
-                + ["-jar", jar_path, "--nogui"]
-            )
+            native    = self.cfg.get("runtime", "java") == "native"
+            if native:
+                if not os.path.isfile(jar_path):
+                    return False, f"Binary not found: {jar_path}"
+                if not os.access(jar_path, os.X_OK):
+                    return False, f"Binary is not executable: {jar_path}"
+                cmd = [jar_path, "nogui"] + extra
+            else:
+                if not os.path.isfile(jar_path):
+                    return False, f"JAR not found: {jar_path}"
+                cmd = (
+                    ["java", f"-Xms{min_mem}M", f"-Xmx{max_mem}M"]
+                    + extra
+                    + ["-jar", jar_path, "--nogui"]
+                )
             try:
-                _harden_server(directory)
+                _harden_server(directory, bool(self.cfg.get("allow_offline", False)))
             except OSError as e:
                 return False, f"failed to harden server config: {e}"
             try:
@@ -618,7 +630,7 @@ class ManagedServer:
                     text=True, bufsize=1,
                 )
             except FileNotFoundError:
-                return False, "java not found - is a JRE installed?"
+                return False, ("binary not found" if native else "java not found - is a JRE installed?")
             except Exception as e:
                 return False, str(e)
             self._append(f"[CreeperCrest] Started PID {self.process.pid}  |  {' '.join(cmd)}")
@@ -721,6 +733,8 @@ class ManagedServer:
             "memory_max_mb": self.cfg.get("memory_max_mb", legacy),
             "directory":     self.cfg.get("directory", ""),
             "jar":           self.cfg.get("jar", "server.jar"),
+            "runtime":       self.cfg.get("runtime", "java"),
+            "allow_offline": bool(self.cfg.get("allow_offline", False)),
             "extra_args":    self.cfg.get("extra_args", ""),
             "autostart":     self.cfg.get("autostart", False),
             "resource_pack":      self.cfg.get("resource_pack", ""),
@@ -1562,12 +1576,14 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
       <div class="frow"><label>Display Name</label><input id="f-name" placeholder="Survival SMP"/></div>
     </div>
     <div class="frow"><label>Server Directory (full path)</label><input id="f-dir" placeholder="/home/crafty/servers/survival"/></div>
+    <div class="frow"><label>Runtime</label><select id="f-runtime" onchange="rtChange('f')"><option value="java">Java (JAR)</option><option value="native">Native binary (e.g. Painite)</option></select></div>
     <div class="frow"><label>JAR filename</label><input id="f-jar" value="server.jar"/></div>
     <div class="frow-2">
       <div class="frow"><label>Min RAM (MB)</label><input id="f-min" type="number" value="512" min="256" step="256"/></div>
       <div class="frow"><label>Max RAM (MB)</label><input id="f-max" type="number" value="2048" min="256" step="256"/></div>
     </div>
     <div class="frow"><label>Extra JVM args</label><input id="f-args" value="__JVM_ARGS__"/></div>
+    <div class="frow"><label><input type="checkbox" id="f-offline" style="width:auto;margin-right:.4rem"/>Allow cracked/offline clients (do not force online-mode on start)</label></div>
     <div class="frow-2">
       <div class="frow"><label>Resource pack URL (optional)</label><input id="f-rp" placeholder="https://example.com/pack.zip"/></div>
       <div class="frow"><label>Resource pack SHA-1 (optional)</label><input id="f-rp-sha1" placeholder="40 hex chars"/></div>
@@ -1614,6 +1630,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
     </div>
 
     <div class="wz-pane" data-step="2">
+      <div class="frow"><label>Runtime</label><select id="wz-runtime" onchange="rtChange('wz')"><option value="java">Java (JAR)</option><option value="native">Native binary (e.g. Painite) - put the binary in the server folder or enter its full path below</option></select></div>
       <div class="frow-2">
         <div class="frow"><label>Server software</label>
           <select id="wz-jtype" onchange="wzLoadVersions()">
@@ -1701,6 +1718,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
       <div class="frow"><label>Display Name</label><input id="fi-name" placeholder="Survival SMP"/></div>
     </div>
     <div class="frow"><label>Extract to Directory (full path)</label><input id="fi-dir" placeholder="/home/crafty/servers/survival"/></div>
+    <div class="frow"><label>Runtime</label><select id="fi-runtime" onchange="rtChange('fi')"><option value="java">Java (JAR)</option><option value="native">Native binary (e.g. Painite)</option></select></div>
     <div class="frow"><label>JAR filename</label><input id="fi-jar" value="server.jar"/></div>
     <div class="frow-2">
       <div class="frow"><label>Min RAM (MB)</label><input id="fi-min" type="number" value="512" min="256" step="256"/></div>
@@ -1747,6 +1765,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
       <div class="frow"><label>Display Name</label><input id="cfb-name" placeholder="Survival SMP"/></div>
     </div>
     <div class="frow"><label>Server Directory (full path)</label><input id="cfb-dir" placeholder="/home/crafty/servers/survival"/></div>
+    <div class="frow"><label>Runtime</label><select id="cfb-runtime" onchange="rtChange('cfb')"><option value="java">Java (JAR)</option><option value="native">Native binary (e.g. Painite)</option></select></div>
     <div class="frow"><label>JAR filename</label><input id="cfb-jar" value="server.jar"/></div>
     <div class="frow-2">
       <div class="frow"><label>Min RAM (MB)</label><input id="cfb-min" type="number" value="512" min="256" step="256"/></div>
@@ -2406,6 +2425,7 @@ async function openWizard() {
   wzProps();
   const set = (id, v) => document.getElementById(id).value = v;
   set('wz-name', ''); set('wz-id', ''); set('wz-p-motd', 'A Minecraft Server'); set('wz-dir', '');
+  set('wz-runtime', 'java'); rtChange('wz');
   set('wz-jar', 'server.jar'); set('wz-min', '512'); set('wz-max', '2048'); set('wz-args', DEFAULT_JVM_ARGS);
   set('wz-rp', ''); set('wz-rp-sha1', ''); set('wz-rp-prompt', ''); set('wz-jtype', 'paper');
   document.getElementById('wz-rp-req').checked = false;
@@ -2545,7 +2565,7 @@ async function wzCreate() {
     properties[p.k] = p.t === 'bool' ? String(el.checked) : el.value.trim();
   }
   const body = {
-    id: v('wz-id'), name: v('wz-name'), directory: v('wz-dir'), jar: v('wz-jar'),
+    id: v('wz-id'), name: v('wz-name'), directory: v('wz-dir'), jar: v('wz-jar'), runtime: v('wz-runtime'),
     memory_min_mb: parseInt(v('wz-min')) || 512, memory_max_mb: parseInt(v('wz-max')) || 2048,
     extra_args: v('wz-args'), jar_type: v('wz-jtype'), jar_version: v('wz-jver'),
     resource_pack: v('wz-rp'), resource_pack_sha1: v('wz-rp-sha1'),
@@ -2609,6 +2629,27 @@ function dpSelect() {
   dpClose();
 }
 
+// ── Runtime (Java JAR / native binary) ────────────────────────────────────────
+
+function rtChange(p) {
+  const native = document.getElementById(p + '-runtime').value === 'native';
+  const jar = document.getElementById(p + '-jar');
+  jar.previousElementSibling.textContent = native ? 'Binary filename or full path (e.g. painite)' : 'JAR filename';
+  if (native && jar.value === 'server.jar') jar.value = 'painite';
+  if (!native && jar.value === 'painite') jar.value = 'server.jar';
+  ['min', 'max'].forEach(k => { const e = document.getElementById(p + '-' + k); if (e) e.disabled = native; });
+  const a = document.getElementById(p + '-args');
+  if (a && native && a.value.includes('-X')) a.value = '';
+  if (a && !native && a.value === '') a.value = DEFAULT_JVM_ARGS;
+  if (a) a.previousElementSibling.textContent = native ? 'Extra arguments (passed to the binary)' : (p === 'wz' ? 'Java arguments' : 'Extra JVM args');
+  if (p === 'wz') {
+    const t = document.getElementById('wz-jtype');
+    if (native) t.value = '';
+    t.disabled = native;
+    wzLoadVersions();
+  }
+}
+
 // ── Add / Edit server modal ────────────────────────────────────────────────────
 
 let _editSid = null;
@@ -2622,6 +2663,10 @@ function openEdit(sid) {
   document.getElementById('f-id-wrap').style.display = 'none';
   document.getElementById('f-name').value = s.name;
   document.getElementById('f-dir').value  = s.directory;
+  document.getElementById('f-jar').value  = s.jar;
+  document.getElementById('f-runtime').value = s.runtime || 'java';
+  document.getElementById('f-offline').checked = !!s.allow_offline;
+  rtChange('f');
   document.getElementById('f-jar').value  = s.jar;
   document.getElementById('f-min').value  = s.memory_min_mb;
   document.getElementById('f-max').value  = s.memory_max_mb;
@@ -2676,6 +2721,8 @@ async function submitEdit() {
     name:          g('f-name'),
     directory:     g('f-dir'),
     jar:           g('f-jar') || 'server.jar',
+    runtime:       g('f-runtime'),
+    allow_offline: document.getElementById('f-offline').checked,
     memory_min_mb: parseInt(g('f-min')) || 512,
     memory_max_mb: parseInt(g('f-max')) || 2048,
     extra_args:    g('f-args'),
@@ -2699,6 +2746,8 @@ function openImport() {
   document.getElementById('fi-id').value   = '';
   document.getElementById('fi-name').value = '';
   document.getElementById('fi-dir').value  = '';
+  document.getElementById('fi-runtime').value = 'java';
+  rtChange('fi');
   document.getElementById('fi-jar').value  = 'server.jar';
   document.getElementById('fi-min').value  = '512';
   document.getElementById('fi-max').value  = '2048';
@@ -2736,6 +2785,7 @@ async function submitImport() {
   form.append('name',          g('fi-name') || sid);
   form.append('directory',     dir);
   form.append('jar',           g('fi-jar') || 'server.jar');
+  form.append('runtime',       g('fi-runtime'));
   form.append('memory_min_mb', min);
   form.append('memory_max_mb', max);
   form.append('extra_args',    g('fi-args'));
@@ -3161,6 +3211,8 @@ function openCreateFromBackup() {
   document.getElementById('cfb-dir').value  = src
     ? (src.directory.endsWith('/') ? src.directory.slice(0, -1) : src.directory) + '-restored'
     : '';
+  document.getElementById('cfb-runtime').value = src ? (src.runtime || 'java') : 'java';
+  rtChange('cfb');
   document.getElementById('cfb-jar').value  = src ? src.jar           : 'server.jar';
   document.getElementById('cfb-min').value  = src ? src.memory_min_mb : 512;
   document.getElementById('cfb-max').value  = src ? src.memory_max_mb : 2048;
@@ -3179,6 +3231,7 @@ async function submitCreateFromBackup() {
     name:          g('cfb-name'),
     directory:     g('cfb-dir'),
     jar:           g('cfb-jar') || 'server.jar',
+    runtime:       g('cfb-runtime'),
     memory_min_mb: parseInt(g('cfb-min')) || 512,
     memory_max_mb: parseInt(g('cfb-max')) || 2048,
     extra_args:    g('cfb-args'),
@@ -3736,6 +3789,7 @@ class Handler(BaseHTTPRequestHandler):
                 "name":          (fields.get("name", sid).strip() or sid),
                 "directory":     directory,
                 "jar":           (fields.get("jar", "server.jar").strip() or "server.jar"),
+                "runtime":       "native" if fields.get("runtime") == "native" else "java",
                 "memory_min_mb": max(256, int(fields.get("memory_min_mb", legacy) or legacy)),
                 "memory_max_mb": max(256, int(fields.get("memory_max_mb", legacy) or legacy)),
                 "extra_args":    fields.get("extra_args", "").strip(),
@@ -3781,6 +3835,7 @@ class Handler(BaseHTTPRequestHandler):
                 "name":          b.get("name", sid).strip() or sid,
                 "directory":     directory,
                 "jar":           b.get("jar", "server.jar").strip() or "server.jar",
+                "runtime":       "native" if b.get("runtime") == "native" else "java",
                 "memory_min_mb": max(256, int(b.get("memory_min_mb", legacy))),
                 "memory_max_mb": max(256, int(b.get("memory_max_mb", legacy))),
                 "extra_args":    b.get("extra_args", "").strip(),
@@ -3831,6 +3886,7 @@ class Handler(BaseHTTPRequestHandler):
                 "name":          b.get("name", sid).strip() or sid,
                 "directory":     b.get("directory", "").strip(),
                 "jar":           b.get("jar", "server.jar").strip() or "server.jar",
+                "runtime":       "native" if b.get("runtime") == "native" else "java",
                 "memory_min_mb": max(256, int(b.get("memory_min_mb", legacy))),
                 "memory_max_mb": max(256, int(b.get("memory_max_mb", legacy))),
                 "extra_args":    b.get("extra_args", "").strip(),
@@ -3851,6 +3907,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": "directory required"}, 400)
             jtype = b.get("jar_type", "").strip().lower()
             ver   = b.get("jar_version", "").strip()
+            if scfg["runtime"] == "native":
+                jtype = ""  # nothing to download for a native binary
             if jtype:
                 if jtype not in JAR_TYPES:
                     return self.send_json({"error": "unknown server type"}, 400)
@@ -4059,6 +4117,10 @@ class Handler(BaseHTTPRequestHandler):
                     srv.cfg["directory"] = b["directory"].strip()
                 if "jar" in b:
                     srv.cfg["jar"] = b["jar"].strip() or "server.jar"
+                if "runtime" in b:
+                    srv.cfg["runtime"] = "native" if b["runtime"] == "native" else "java"
+                if "allow_offline" in b:
+                    srv.cfg["allow_offline"] = bool(b["allow_offline"])
                 if "memory_min_mb" in b:
                     srv.cfg["memory_min_mb"] = max(256, int(b["memory_min_mb"]))
                 if "memory_max_mb" in b:
