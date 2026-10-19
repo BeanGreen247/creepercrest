@@ -262,6 +262,9 @@ static bool https_req(const http::Request &rq) { return tls_on() || rq.hdr("x-fo
 void security_headers(const http::Request &rq, http::Response &rs) {
     rs.set("X-Content-Type-Options", "nosniff");
     rs.set("X-Frame-Options", "DENY");
+    rs.set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
+    rs.set("Cross-Origin-Opener-Policy", "same-origin");
+    rs.set("Cross-Origin-Resource-Policy", "same-origin");
     rs.set("Referrer-Policy", "same-origin");
     rs.set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
     if (https_req(rq)) rs.set("Strict-Transport-Security", "max-age=31536000");
