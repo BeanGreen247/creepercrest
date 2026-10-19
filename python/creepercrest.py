@@ -3549,8 +3549,40 @@ startRefresh();
 
 # ── HTTP Handler ───────────────────────────────────────────────────────────────
 
+MAX_CONNS_PER_IP = 32
+
+class CappedServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer with a per-address connection cap, so one client cannot hold every thread."""
+    def __init__(self, *args, **kwargs):
+        self._live = {}
+        self._conn_ip = {}                 # id(socket) -> counted address
+        self._live_lock = threading.Lock()
+        super().__init__(*args, **kwargs)
+
+    def verify_request(self, request, client_address):
+        ip = client_address[0]
+        if ip in cfg.get("trusted_proxies", []):      # a reverse proxy carries many clients from one address
+            return True
+        with self._live_lock:
+            if self._live.get(ip, 0) >= MAX_CONNS_PER_IP:
+                return False
+            self._live[ip] = self._live.get(ip, 0) + 1
+            self._conn_ip[id(request)] = ip
+        return True
+
+    def shutdown_request(self, request):
+        with self._live_lock:
+            ip = self._conn_ip.pop(id(request), None)
+            if ip:
+                n = self._live.get(ip, 0) - 1
+                if n > 0:
+                    self._live[ip] = n
+                else:
+                    self._live.pop(ip, None)
+        super().shutdown_request(request)
+
 class Handler(BaseHTTPRequestHandler):
-    timeout        = 60              # idle socket timeout: drops slow/stalled connections
+    timeout        = 20              # idle socket timeout: drops slow/stalled connections
     server_version = "CreeperCrest"
     sys_version    = ""
 
@@ -4520,7 +4552,7 @@ def main():
     if not AUTH_DISABLED and not load_users() and not cfg.get("lan_mode"):
         print("WARNING: no users exist, so the panel is locked. Create one with:  python3 creepercrest.py adduser <name>")
 
-    httpd = ThreadingHTTPServer((host, port), Handler)
+    httpd = CappedServer((host, port), Handler)
     if TLS_ON:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
