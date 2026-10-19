@@ -48,7 +48,7 @@ static bool has(int argc, char **argv, const char *flag) {
 
 bool is_cli_command(const std::string &c) {
     static const char *names[] = {"adduser", "passwd", "reset-2fa", "deluser", "users", "--remove-user",
-                                  "remove-user", "removeuser", "rmuser", "lan-mode", "config-get", "server-ports"};
+                                  "remove-user", "removeuser", "rmuser", "lan-mode", "config-get", "config-set", "server-ports"};
     for (auto n : names) if (c == n) return true;
     return false;
 }
@@ -65,6 +65,16 @@ int cli(int argc, char **argv) {
         else if (v->type == json::Value::Bool) puts(v->b ? "true" : "false");
         else return 1;
         return 0;
+    }
+    if (cmd == "config-set") {   // sets one top-level scalar in config.json (used by deploy.sh)
+        if (argc < 3) return 2;
+        std::string v = argv[2];
+        char *e;
+        long long n = strtoll(v.c_str(), &e, 10);
+        if (v == "true" || v == "false") app::cfg.raw[argv[1]] = v == "true";
+        else if (!v.empty() && !*e) app::cfg.raw[argv[1]] = (int64_t)n;
+        else app::cfg.raw[argv[1]] = v;
+        return app::save_config() ? 0 : 1;
     }
     if (cmd == "server-ports") {   // server-port of every configured server (used to open firewall ports)
         if (auto *sv = app::cfg.raw.find("servers"); sv && sv->is_obj())

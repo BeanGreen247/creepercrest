@@ -158,6 +158,41 @@ for u in $NEW_USERS; do
     sudo -u "$TARGET_USER" python3 "$TARGET_DIR/creepercrest.py" adduser "$u" || true
 done
 
+# ── HTTPS ────────────────────────────────────────────────────
+echo ""
+echo "HTTPS"
+echo "  Without HTTPS, passwords, authenticator codes and session cookies cross the network unencrypted."
+echo "  A self-signed certificate encrypts the traffic; your browser will ask you to trust it once."
+if command -v openssl &>/dev/null; then
+    read -rp "Create a self-signed certificate and serve the panel over HTTPS? [y/N]: " TLS_CHOICE
+else
+    TLS_CHOICE=n
+    echo "  openssl is not installed, skipping (install it and set tls_cert / tls_key in config.json to enable HTTPS)."
+fi
+case "${TLS_CHOICE:-n}" in
+    [yY]*)
+        TLS_DIR="$TARGET_DIR/tls"
+        HOSTN=$(hostname)
+        SAN="DNS:$HOSTN,DNS:localhost,IP:127.0.0.1"
+        for ip in $(hostname -I 2>/dev/null); do SAN="$SAN,IP:$ip"; done
+        sudo -u "$TARGET_USER" mkdir -p "$TLS_DIR"
+        sudo chmod 700 "$TLS_DIR"
+        if sudo -u "$TARGET_USER" openssl req -x509 -newkey rsa:3072 -nodes -days 825 -keyout "$TLS_DIR/key.pem" \
+               -out "$TLS_DIR/cert.pem" -subj "/CN=$HOSTN" -addext "subjectAltName=$SAN" 2>/dev/null; then
+            sudo chmod 600 "$TLS_DIR/key.pem"
+            sudo -u "$TARGET_USER" python3 - "$TARGET_DIR/config.json" "$TLS_DIR/cert.pem" "$TLS_DIR/key.pem" <<'PYEOF'
+import json, sys
+c = json.load(open(sys.argv[1]))
+c["tls_cert"], c["tls_key"] = sys.argv[2], sys.argv[3]
+json.dump(c, open(sys.argv[1], "w"), indent=2)
+PYEOF
+            echo "  HTTPS enabled (certificate valid for 825 days, in $TLS_DIR)"
+        else
+            echo "  Could not create the certificate; staying on plain HTTP."
+        fi ;;
+    *) ;;
+esac
+
 # ── Firewall (ufw) ─────────────────────────────────────────────────────────────
 UFW=$(command -v ufw || echo /usr/sbin/ufw)
 if [ "$SKIP_FW" = 1 ]; then
@@ -277,7 +312,9 @@ echo ""
 echo "────────────────────────────────────"
 echo "  CreeperCrest deployed successfully"
 echo "  Running as : $TARGET_USER"
-echo "  UI         : http://${IP}:${PORT}"
+SCHEME=http
+[ -n "$(sudo -u "$TARGET_USER" python3 -c "import json; print(json.load(open('$TARGET_DIR/config.json')).get('tls_cert', ''))" 2>/dev/null)" ] && SCHEME=https
+echo "  UI         : ${SCHEME}://${IP}:${PORT}"
 echo "────────────────────────────────────"
 echo ""
 echo "Useful commands:"
