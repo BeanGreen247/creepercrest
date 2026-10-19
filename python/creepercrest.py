@@ -1496,6 +1496,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
     <button class="nav-link" onclick="showPage('backups',this)">Backups</button>
   </nav>
   <a href="https://github.com/BeanGreen247/creepercrest" target="_blank" rel="noopener" style="font-size:.73rem;color:#7d8590;white-space:nowrap">by BeanGreen247</a>
+  __BACKEND__
   <div class="refresh-ctrl">
     <label for="refresh-secs">Refresh every</label>
     <input id="refresh-secs" type="number" min="5" max="300" value="__REFRESH_INTERVAL__"/>
@@ -3585,7 +3586,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_html(HTML.replace("__REFRESH_INTERVAL__", interval)
                                       .replace("__JVM_ARGS__", default_jvm_args())
                                       .replace("__CSRF__", self.sess["csrf"])
-                                      .replace("__ACCT__", _acct_html(self.sess["user"])))
+                                      .replace("__ACCT__", _acct_html(self.sess["user"]))
+                                      .replace("__BACKEND__", '<span title="Python backend (creepercrest.py)" style="font-size:.68rem;font-weight:600;letter-spacing:.03em;padding:.12rem .5rem;border-radius:999px;color:#e3b341;border:1px solid #6b5416;background:#2a2108;white-space:nowrap">PYTHON BACKEND</span>')
+                                      .replace("<title>CreeperCrest</title>", "<title>CreeperCrest (Python)</title>"))
 
         if parts == ["static", "editor.js"]:     # bundled CodeMirror, served locally so the panel works offline
             try:

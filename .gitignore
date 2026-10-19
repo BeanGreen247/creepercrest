@@ -39,3 +39,5 @@ Thumbs.db
 .env.*
 users.json
 users.json.tmp
+cpp/build/
+cpp/creepercrest

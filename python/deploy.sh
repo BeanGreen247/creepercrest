@@ -117,7 +117,7 @@ copy_if_different() {
 }
 
 copy_if_different "$SCRIPT_DIR/creepercrest.py" "$TARGET_DIR/creepercrest.py" "creepercrest.py"
-copy_if_different "$SCRIPT_DIR/README.md"       "$TARGET_DIR/README.md"       "README.md"
+copy_if_different "$SCRIPT_DIR/../README.md" "$TARGET_DIR/README.md"       "README.md"
 
 # Bundled editor (CodeMirror) - served locally so the panel works offline
 sudo mkdir -p "$TARGET_DIR/static"

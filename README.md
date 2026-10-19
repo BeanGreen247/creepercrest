@@ -1,31 +1,83 @@
 # CreeperCrest
 
-A small web panel for running Minecraft servers. One Python file, standard library only, works offline.
+A small web panel for running Minecraft servers. One native C++ binary (about 1 MB) with the web UI and editor built in, works offline. The original single-file Python version is kept in `python/` until the migration is complete; the C++ port in `cpp/` has the same features, the same `config.json` and `users.json`, and the same login and 2FA.
 
 ## Features
 
 - Start, stop and restart servers, with a live console and command box
 - Setup wizard: pick Paper, Vanilla, Purpur or Fabric and a version, and the JAR is downloaded for you
 - Runtime per server: Java JAR, or a native binary such as [Painite](https://github.com/BeanGreen247/painite) (choose it in the wizard, or switch it later in Edit; a Browse button next to the JAR/binary field fills in the full path)
-- File manager with a built-in code editor (syntax highlighting, find/replace, Ctrl+S)
+- File manager with a built-in code editor (syntax highlighting, find/replace, Ctrl+S); the editor is a small hand-written one of about 15 KB, not a bundled library
 - Whitelist editor per server, with removal by UUID
 - Resource packs: upload or download one and CreeperCrest hosts it
-- One-click and scheduled backups, restore, per-server RAM and autostart
+- One-click and scheduled backups, restore, per-server RAM and autostart; tick which servers the weekly scheduled backup covers
 - Login with password and 2FA
 
 ## Install
 
 ```bash
 git clone https://github.com/BeanGreen247/creepercrest
-cd creepercrest
+cd creepercrest/cpp
 sudo bash deploy.sh
 ```
 
-`deploy.sh` installs Python, OpenJDK and `ufw`, opens the firewall ports you choose, creates login users and installs a systemd service. It is safe to rerun: it keeps `config.json`, `users.json` and your servers, but it never deletes old firewall rules, so check `sudo ufw status numbered` afterwards.
+`deploy.sh` builds the binary if it is not built yet (needs `g++`, `make`, and the OpenSSL and libzip development packages, which it installs), then installs OpenJDK and `ufw`, opens the firewall ports you choose, creates login users and installs a systemd service. It is safe to rerun: it keeps `config.json`, `users.json` and your servers, but it never deletes old firewall rules, so check `sudo ufw status numbered` afterwards.
 
 Skip the firewall steps with `CC_SKIP_FIREWALL=1 sudo -E bash deploy.sh`. Open `http://<server-ip>:8888` when it finishes.
 
-Run it by hand with `python3 creepercrest.py`. Run it as the user that owns the server files.
+Build and run by hand with `make -C cpp && cpp/creepercrest`. It keeps `config.json` and `users.json` next to the binary (or in the folder named by `CREEPERCREST_DIR`). Run it as the user that owns the server files. The Python version still runs with `python3 python/creepercrest.py` and installs with `sudo bash python/deploy.sh`.
+
+## Python version: keeping it, switching, migrating fully
+
+The Python version in `python/` and the C++ version in `cpp/` share the same install folder (`~/creepercrest`), the same `creepercrest` systemd service, the same port, and the same `config.json` and `users.json`. Only one of them can run at a time. The page header tells you which one you are talking to: a green **C++ BACKEND** pill, or an amber **PYTHON BACKEND** pill.
+
+### Already running the Python version
+
+Nothing breaks and nothing needs doing. The installed copy keeps running. After a `git pull`, the Python installer lives in `python/`, so update it with:
+
+```bash
+sudo bash python/deploy.sh
+```
+
+### Switching to the C++ version
+
+```bash
+cd creepercrest/cpp
+sudo bash deploy.sh
+```
+
+Your users, 2FA codes, servers and settings carry over. Everyone is signed out once. Check it worked:
+
+```bash
+systemctl cat creepercrest | grep ExecStart    # should end in .../creepercrest, not python3
+```
+
+and look for the green **C++ BACKEND** pill in the page header.
+
+### Going back to Python
+
+```bash
+sudo bash python/deploy.sh
+```
+
+This rewrites the service to start the Python script again. One difference to know about: the per-server tick for scheduled backups is only understood by the C++ version, so Python backs up every server on the schedule.
+
+### Migrating fully (removing the Python version)
+
+Do this only after the C++ version has run correctly for you for a while, because it removes your way back.
+
+1. Back up your settings: `cp ~/creepercrest/config.json ~/creepercrest/users.json ~/`
+2. Switch with `cpp/deploy.sh` as above, and confirm the green pill and the `ExecStart` line.
+3. Remove the Python leftovers from the install folder (the C++ binary needs none of them):
+   ```bash
+   rm -f ~/creepercrest/creepercrest.py
+   rm -rf ~/creepercrest/static ~/creepercrest/__pycache__
+   ```
+   Keep `creepercrest` (the binary), `config.json`, `users.json` and your server folders.
+4. Optional: if nothing else on the machine uses them, remove the Python packages the old installer added: `sudo apt remove python3-qrcode python3-qrcodegen` (leave `python3` itself alone, since the system usually needs it). Keep `qrencode`; the C++ version uses it for QR codes.
+5. Optional, in your clone of this repository: delete the Python version with `git rm -r python/` and commit. After that, `python/deploy.sh` no longer exists, so going back means checking out an older commit.
+
+Run `sudo bash cpp/deploy.sh` again whenever you update the C++ version; it keeps your settings.
 
 ## Ports
 
@@ -54,18 +106,34 @@ The whitelist matches the account UUID, so a hijacked account still gets in. If 
 The panel is locked until a user exists. Manage users on the host:
 
 ```bash
-python3 creepercrest.py adduser <name>      # prints a generated password and 2FA key once
-python3 creepercrest.py passwd <name>
-python3 creepercrest.py reset-2fa <name>
-python3 creepercrest.py deluser <name>
-python3 creepercrest.py users
+creepercrest adduser <name>             # prints a generated password and 2FA key once
+creepercrest passwd <name>
+creepercrest reset-2fa <name>
+creepercrest deluser <name>
+creepercrest users
 ```
 
-Passwords are hashed with scrypt, logins are throttled, sessions last 8 h idle, and every state-changing request carries a CSRF token. The only public URL is `/resourcepack/<id>.zip`, because Minecraft clients cannot log in. Install `qrencode` or the Python `qrcode` module to get a QR code for enrolment.
+Passwords are hashed with scrypt, logins are throttled, sessions last 8 h idle, and every state-changing request carries a CSRF token. The only public URL is `/resourcepack/<id>.zip`, because Minecraft clients cannot log in. Install `qrencode` to get a QR code for enrolment, both in the terminal and on the 2FA page.
 
-**LAN mode** (`python3 creepercrest.py lan-mode on`) skips the login for private-network clients. Never port-forward the panel while it is on.
+**LAN mode** (`creepercrest lan-mode on`) skips the login for private-network clients. Never port-forward the panel while it is on.
 
 **On the internet:** prefer a VPN. Otherwise serve it over HTTPS, either behind a reverse proxy that sets `X-Forwarded-Proto` and `X-Forwarded-For` (then set `trusted_proxies`), or with `tls_cert` / `tls_key` in `config.json`.
+
+## C++ version versus Python version
+
+Measured on the dev machine (Debian 13, 2 cores) with an empty panel and the same `users.json`. Memory is `VmRSS` from `/proc`; "private" is `RssAnon`, the part that is not the program file or shared libraries.
+
+| | Python | C++ |
+|---|---|---|
+| Time from launch to first page served | 0.37 s | 0.02 s |
+| Memory used, idle | 32 MB | 9.7 MB |
+| Private (anonymous) memory, idle | 18.9 MB | 1.3 MB |
+| CPU used over 60 s idle | 0.02 s | 0.00 s |
+| Peak memory while uploading a 200 MB file | 852 MB | 42 MB |
+| Program size | 4,315-line script plus 651 KB editor bundle, needs Python | 1.06 MB binary, editor 15 KB |
+| Runtime needs | Python 3 | OpenSSL and libzip libraries |
+
+The C++ version also reads host and process CPU only when the page asks for it, so it never wakes up on its own except for a once-a-minute backup schedule check. The Minecraft server itself is unaffected by the choice: a Paper server in the same test used about 800 to 1,030 MB, so the panel is a small part of the total either way. These are single runs on one machine; repeat them with `ps` and `/proc/<pid>/status` before relying on the exact numbers.
 
 ## Configuration
 
@@ -76,6 +144,7 @@ Passwords are hashed with scrypt, logins are throttled, sessions last 8 h idle, 
 | `host`, `port` | Listen address and port (default `0.0.0.0:8888`) |
 | `backup_dir` | Backup folder (default `~/mc-backups`) |
 | `max_backups` | Backups kept per server, `0` = unlimited |
+| `auto_backup` | Weekly schedule: `enabled`, `day`, `hour`, `minute` and optional `servers` (list of server ids; leave it out for all servers). Edit it from the Backups page |
 | `lan_mode` | No login for private-network clients |
 | `trusted_proxies`, `allowed_hosts` | Reverse-proxy and hostname allow-lists |
 | `tls_cert`, `tls_key` | Serve HTTPS directly |
@@ -87,8 +156,11 @@ Passwords are hashed with scrypt, logins are throttled, sessions last 8 h idle, 
 ## Files
 
 ```
-creepercrest.py        web server, process manager, backups
-static/editor.js       bundled CodeMirror editor (see static/LICENSES.md)
+cpp/src/               C++ sources: HTTP server, auth and 2FA, process manager, backups, API
+cpp/ui/                web UI (index.html) and the built-in editor (editor.js), embedded in the binary
+cpp/deploy.sh          installer for the C++ version
+cpp/creepercrest.service  systemd unit template
+python/                original Python version: creepercrest.py, static/ (CodeMirror bundle), deploy.sh, service file, default config.json
 deploy.sh              installer
 creepercrest.service   systemd unit template
 config.json            settings
