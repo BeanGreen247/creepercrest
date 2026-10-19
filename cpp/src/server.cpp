@@ -94,6 +94,8 @@ static std::string trim(const std::string &s) {
 }
 
 bool set_properties(const std::string &dir0, const std::vector<std::pair<std::string, std::string>> &updates) {
+    for (auto &u : updates)   // a line break would add extra settings to the file
+        if (u.first.find_first_of("\r\n=") != std::string::npos || u.second.find_first_of("\r\n") != std::string::npos) return false;
     std::string dir = fsu::expand_home(dir0), path = dir + "/server.properties", text;
     std::vector<std::string> lines;
     if (fsu::is_file(path)) {
@@ -188,6 +190,7 @@ bool validate_props(const Value &raw, std::vector<std::pair<std::string, std::st
 
 bool check_pack(const std::string &url, const std::string &sha1, const std::string &prompt, std::string &err) {
     if (prompt.find_first_of("\r\n") != std::string::npos || prompt.size() > 256) { err = "Resource pack prompt must be one line, 256 characters or fewer"; return false; }
+    if (url.find_first_of(std::string("\r\n\0", 3)) != std::string::npos) { err = "Resource pack URL must be one line"; return false; }
     if (!url.empty() && strncasecmp(url.c_str(), "http://", 7) && strncasecmp(url.c_str(), "https://", 8)) { err = "Resource pack URL must start with http:// or https://"; return false; }
     if (!sha1.empty()) {
         bool ok = sha1.size() == 40;

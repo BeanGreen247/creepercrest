@@ -263,6 +263,9 @@ def _get_sysinfo():
 
 def _set_properties(directory, updates):
     """Set keys in <directory>/server.properties, preserving other lines."""
+    for k, v in updates.items():      # a line break would add extra settings to the file
+        if re.search(r"[\r\n=]", str(k)) or re.search(r"[\r\n]", str(v)):
+            raise OSError("invalid value for " + str(k))
     path = os.path.join(os.path.expanduser(directory), "server.properties")
     lines = []
     if os.path.isfile(path):
@@ -380,6 +383,8 @@ def _check_not_whitelisted(srv, line):
 def _check_pack(url, sha1, prompt=""):
     if re.search(r"[\r\n]", prompt) or len(prompt) > 256:
         return "Resource pack prompt must be one line, 256 characters or fewer"
+    if re.search(r"[\r\n\x00]", url):
+        return "Resource pack URL must be one line"
     if url and not re.match(r"^https?://", url, re.I):
         return "Resource pack URL must start with http:// or https://"
     if sha1 and not re.fullmatch(r"[0-9a-f]{40}", sha1):
