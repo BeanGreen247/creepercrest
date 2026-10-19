@@ -11,6 +11,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <atomic>
+#include <chrono>
+#include <map>
+#include <mutex>
 #include <cstring>
 #include <cerrno>
 #include <csignal>
@@ -116,7 +119,15 @@ struct Ctx {
     std::atomic<int> *live;
 };
 
-struct ThreadArg { Ctx ctx; int fd; std::string peer; };
+struct ThreadArg { Ctx ctx; int fd; std::string peer; bool counted; };
+
+std::mutex ip_mu;
+std::map<std::string, int> ip_live;      // open connections per peer address
+void ip_release(const std::string &ip) {
+    std::lock_guard<std::mutex> g(ip_mu);
+    auto it = ip_live.find(ip);
+    if (it != ip_live.end() && --it->second <= 0) ip_live.erase(it);
+}
 
 bool send_simple(Conn &c, int code, const char *msg) {
     std::string r = std::string("HTTP/1.1 ") + std::to_string(code) + " " + status_text(code) +
@@ -129,16 +140,35 @@ bool ieq(const std::string &a, const char *b) { return strcasecmp(a.c_str(), b) 
 bool write_response(Conn &c, Request &rq, Response &rs, bool keep);
 
 // Reads one request. Returns 0 ok, 1 clean close, 2 error already answered.
-int read_request(Conn &c, const Options &opt, Request &rq) {
+using Clock = std::chrono::steady_clock;
+
+// Reads with an absolute deadline: a client that trickles bytes cannot keep the connection (and a slot) forever.
+ssize_t rd_until(Conn &c, void *b, size_t n, Clock::time_point deadline) {
+    auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
+    if (left <= 0) return -2;
+    struct timeval tv{(time_t)(left / 1000), (suseconds_t)((left % 1000) * 1000)};
+    if (tv.tv_sec == 0 && tv.tv_usec == 0) tv.tv_usec = 1000;
+    setsockopt(c.fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    ssize_t r = c.rd(b, n);
+    return r;
+}
+
+int read_request(Conn &c, const Options &opt, Request &rq, bool first) {
     std::string &buf = c.rbuf;
     size_t hend;
     char tmp[8192];
+    auto deadline = Clock::now() + std::chrono::seconds(first ? opt.header_s : opt.idle_s);
+    bool got_bytes = !buf.empty();
     while ((hend = buf.find("\r\n\r\n")) == std::string::npos) {
         if (buf.size() > 16384) { send_simple(c, 431, "headers too large"); return 2; }
-        ssize_t n = c.rd(tmp, sizeof tmp);
+        ssize_t n = rd_until(c, tmp, sizeof tmp, deadline);
+        if (n == -2) { if (got_bytes) send_simple(c, 408, "request timeout"); return got_bytes ? 2 : 1; }
         if (n <= 0) return buf.empty() ? 1 : 2;
+        if (!got_bytes) { got_bytes = true; deadline = Clock::now() + std::chrono::seconds(opt.header_s); }
         buf.append(tmp, (size_t)n);
     }
+    struct timeval body_tv{opt.timeout_s, 0};
+    setsockopt(c.fd, SOL_SOCKET, SO_RCVTIMEO, &body_tv, sizeof body_tv);
     if (hend > 16384) { send_simple(c, 431, "headers too large"); return 2; }
     std::string head = buf.substr(0, hend);
     buf.erase(0, hend + 4);
@@ -256,7 +286,7 @@ bool write_response(Conn &c, Request &rq, Response &rs, bool keep) {
 void *conn_main(void *p) {
     std::unique_ptr<ThreadArg> a((ThreadArg *)p);
     Conn c(a->fd);
-    struct timeval tv{a->ctx.opt->timeout_s, 0};
+    struct timeval tv{a->ctx.opt->header_s, 0};   // also bounds the TLS handshake
     setsockopt(c.fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
     setsockopt(c.fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
     int one = 1;
@@ -271,7 +301,7 @@ void *conn_main(void *p) {
         Request rq;
         rq.peer = a->peer;
         rq.tls = c.ssl != nullptr;
-        int r = read_request(c, *a->ctx.opt, rq);
+        int r = read_request(c, *a->ctx.opt, rq, served == 0);
         if (r) break;
         Response rs;
         try {
@@ -290,6 +320,7 @@ void *conn_main(void *p) {
     }
     if (c.ssl) { SSL_shutdown(c.ssl); SSL_free(c.ssl); }
     close(c.fd);
+    if (a->counted) ip_release(a->peer);
     --*a->ctx.live;
     return nullptr;
 }
@@ -352,14 +383,31 @@ void run(int ls, const Options &opt, Handler h) {
             close(fd);
             continue;
         }
+        bool exempt = std::find(opt.unlimited_ips.begin(), opt.unlimited_ips.end(), peer) != opt.unlimited_ips.end();
+        if (!exempt) {
+            bool full;
+            {
+                std::lock_guard<std::mutex> g(ip_mu);
+                int &n = ip_live[peer];
+                full = n >= opt.max_conns_per_ip;
+                if (!full) n++;
+                else if (n <= 0) ip_live.erase(peer);
+            }
+            if (full) {
+                Conn c(fd);
+                send_simple(c, 503, "too many connections from your address");
+                close(fd);
+                continue;
+            }
+        }
         ++live;
         pthread_attr_t at;
         pthread_attr_init(&at);
         pthread_attr_setstacksize(&at, 512 * 1024);
         pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
         pthread_t t;
-        auto *arg = new ThreadArg{ctx, fd, peer};
-        if (pthread_create(&t, &at, conn_main, arg) != 0) { delete arg; close(fd); --live; }
+        auto *arg = new ThreadArg{ctx, fd, peer, !exempt};
+        if (pthread_create(&t, &at, conn_main, arg) != 0) { if (!exempt) ip_release(peer); delete arg; close(fd); --live; }
         pthread_attr_destroy(&at);
     }
 }

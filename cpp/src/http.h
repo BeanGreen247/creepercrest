@@ -48,8 +48,12 @@ struct Options {
     int port = 8888;
     std::string tls_cert, tls_key;
     size_t max_body = (size_t)2 << 30;
-    int timeout_s = 60;
-    int max_conns = 128;
+    int timeout_s = 60;            // per read/write once a request is being served
+    int header_s = 10;             // a client must finish its request headers within this long
+    int idle_s = 15;               // idle keep-alive connections are closed after this long
+    int max_conns = 256;
+    int max_conns_per_ip = 32;     // one address cannot hold every slot; trusted proxies are exempt
+    std::vector<std::string> unlimited_ips;
     std::string spool_dir = "/tmp";
 };
 

@@ -31,6 +31,7 @@ int main(int argc, char **argv) {
     http::Options opt;
     opt.spool_dir = base;
     opt.body_gate = app::body_gate;
+    opt.unlimited_ips = app::cfg.trusted_proxies;   // a reverse proxy carries many clients from one address
     opt.host = app::cfg.host;
     opt.port = app::cfg.port;
     opt.tls_cert = app::cfg.tls_cert;
