@@ -135,6 +135,14 @@ void on_progress(zip_t *, double frac, void *ud) {
 } // namespace
 
 void create(const std::string &zip_path, const std::vector<std::pair<std::string, std::string>> &files, const Progress &prog) {
+    if (files.empty()) {   // libzip writes nothing for an empty archive; an empty zip is just the end-of-directory record
+        static const char eocd[22] = {'P', 'K', 5, 6};
+        int fd = open(zip_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+        if (fd < 0 || write(fd, eocd, sizeof eocd) != (ssize_t)sizeof eocd) { if (fd >= 0) close(fd); throw std::runtime_error("cannot write " + zip_path); }
+        close(fd);
+        if (prog) prog(0, 0);
+        return;
+    }
     int err = 0;
     zip_t *z = zip_open(zip_path.c_str(), ZIP_CREATE | ZIP_TRUNCATE, &err);
     if (!z) throw std::runtime_error(zerr(err));
