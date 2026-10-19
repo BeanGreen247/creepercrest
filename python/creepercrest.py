@@ -4409,6 +4409,10 @@ class Handler(BaseHTTPRequestHandler):
             del cfg["servers"][sid]
             save_cfg(cfg)
             if directory and os.path.isdir(directory):
+                real, home, panel = (os.path.realpath(x) for x in (directory, os.path.expanduser("~"), BASE_DIR))
+                covers = lambda outer, inner: inner == outer or outer == "/" or inner.startswith(outer.rstrip("/") + "/")
+                if covers(real, home) or covers(real, panel):      # a mistyped folder must never take the home folder with it
+                    return self.send_json({"ok": True, "warn": f"Removed from config, but the folder was not deleted because it contains your home or the panel: {directory}"})
                 import shutil
                 try:
                     shutil.rmtree(directory)
