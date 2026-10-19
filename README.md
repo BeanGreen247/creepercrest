@@ -167,6 +167,7 @@ The C++ version also reads host and process CPU only when the page asks for it, 
 | `max_backups` | Backups kept per server, `0` = unlimited |
 | `auto_backup` | Weekly schedule: `enabled`, `day`, `hour`, `minute` and optional `servers` (list of server ids; leave it out for all servers). Edit it from the Backups page |
 | `lan_mode` | No login for private-network clients |
+| `allow_private_fetch` | Let the panel download from private and loopback addresses, for example a resource pack on your LAN (default off, and not implied by `lan_mode`) |
 | `trusted_proxies`, `allowed_hosts` | Reverse-proxy and hostname allow-lists |
 | `tls_cert`, `tls_key` | Serve HTTPS directly |
 | `refresh_interval` | UI refresh in seconds (default `5`) |

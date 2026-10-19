@@ -450,8 +450,8 @@ def install_resource_pack(srv, data, host):
     return True, srv.cfg["resource_pack"]
 
 def _assert_public_url(url):
-    """Refuse URLs that resolve to loopback/private/link-local addresses (SSRF), unless LAN mode allows it."""
-    if cfg.get("lan_mode") or cfg.get("allow_private_fetch"):
+    """Refuse URLs that resolve to loopback/private/link-local addresses (SSRF), unless allow_private_fetch is set."""
+    if cfg.get("allow_private_fetch"):      # deliberately not tied to LAN mode: that mode skips the login
         return
     host = urlparse(url).hostname
     if not host:

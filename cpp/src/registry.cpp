@@ -62,7 +62,7 @@ void stop_all() {
 
 fetch::Policy fetch_policy() {
     fetch::Policy p;
-    p.allow_private = app::cfg.lan_mode || app::cfg.raw.flag("allow_private_fetch");
+    p.allow_private = app::cfg.raw.flag("allow_private_fetch");   // deliberately not tied to LAN mode
     return p;
 }
 
