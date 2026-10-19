@@ -306,18 +306,26 @@ def whitelist_remove_uuid(srv, uuid_str):
 
 _NOT_WL_RE = re.compile(r"not\s+white-?listed", re.I)
 _ADDR_RE   = re.compile(r"/((?:\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F:]{3,39}):\d+")
-_NAME_RES  = (re.compile(r"name=([A-Za-z0-9_.]{1,32})[,)]"),
-              re.compile(r"Disconnecting ([A-Za-z0-9_.]{1,32}) \("),
-              re.compile(r"([A-Za-z0-9_.]{1,32})\[/[^\]]+\] lost connection"))
+# Only the server's own refusal messages count. Everything a player can type (chat, commands, private messages) is
+# printed after a different lead-in, so each pattern is anchored at the start of the message, never searched for.
+_NAME_RES  = (re.compile(r"^Disconnecting ([A-Za-z0-9_.]{1,32}) \(/"),
+              re.compile(r"^com\.mojang\.authlib\.GameProfile@[0-9a-fA-F]+\[[^\]]*?name=([A-Za-z0-9_.]{1,32})[,)]"),
+              re.compile(r"^([A-Za-z0-9_.]{1,32})\[/[^\]]+\] lost connection"))
 
 def _check_not_whitelisted(srv, line):
     """Auto-ban a name (always) and its IP (public IPs only) when it is refused by the whitelist."""
-    if not _NOT_WL_RE.search(line):
+    _, sep, msg = line.partition("]: ")      # the first one ends the server's own log prefix
+    if not sep:
         return
-    name = next((m.group(1) for r in _NAME_RES if (m := r.search(line))), None)
-    m = _ADDR_RE.search(line)
+    msg = re.sub(r"^(?:\x1b\[[0-9;]*m)+", "", msg)
+    if not _NOT_WL_RE.search(msg):
+        return
+    name = next((m.group(1) for r in _NAME_RES if (m := r.search(msg))), None)
+    if name is None:
+        return
+    m = _ADDR_RE.search(msg)
     ip = m.group(1) if m else None
-    if name and name not in srv._banned:
+    if name not in srv._banned:
         srv._banned.add(name)
         srv.send_command(f"ban {name} Not whitelisted")
     if ip and ip not in srv._banned:

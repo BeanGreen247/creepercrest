@@ -487,16 +487,29 @@ static bool ci_find_not_whitelisted(const std::string &line) {
     return false;
 }
 
+// Only the server's own refusal messages count. Everything a player can type (chat, commands, private messages) is
+// printed after a different lead-in, so each pattern is anchored at the start of the message, never searched for.
 void ManagedServer::check_not_whitelisted(const std::string &line) {
-    if (!ci_find_not_whitelisted(line)) return;
-    static const std::regex name_res[3] = {std::regex("name=([A-Za-z0-9_.]{1,32})[,)]"),
-                                           std::regex("Disconnecting ([A-Za-z0-9_.]{1,32}) \\("),
-                                           std::regex("([A-Za-z0-9_.]{1,32})\\[/[^\\]]+\\] lost connection")};
+    size_t p = line.find("]: ");            // end of the server's log prefix; the first one is always the server's own
+    if (p == std::string::npos) return;
+    std::string msg = line.substr(p + 3);
+    while (msg.size() >= 2 && msg[0] == '\x1b' && msg[1] == '[') {   // colour codes in front of the text
+        size_t m = msg.find('m');
+        if (m == std::string::npos) break;
+        msg.erase(0, m + 1);
+    }
+    if (!ci_find_not_whitelisted(msg)) return;
+    static const std::regex name_res[3] = {
+        std::regex("^Disconnecting ([A-Za-z0-9_.]{1,32}) \\(/"),
+        std::regex("^com\\.mojang\\.authlib\\.GameProfile@[0-9a-fA-F]+\\[[^\\]]*?name=([A-Za-z0-9_.]{1,32})[,)]"),
+        std::regex("^([A-Za-z0-9_.]{1,32})\\[/[^\\]]+\\] lost connection")};
     static const std::regex addr_re("/((?:\\d{1,3}\\.){3}\\d{1,3}|[0-9a-fA-F:]{3,39}):\\d+");
     std::string name, ip;
     std::smatch m;
-    for (auto &r : name_res) if (std::regex_search(line, m, r)) { name = m[1]; break; }
-    if (std::regex_search(line, m, addr_re)) ip = m[1];
+    bool anchored = false;
+    for (auto &r : name_res) if (std::regex_search(msg, m, r)) { name = m[1]; anchored = true; break; }
+    if (!anchored) return;
+    if (std::regex_search(msg, m, addr_re)) ip = m[1];
     bool ban_name = false, ban_ip = false;
     {
         std::lock_guard<std::mutex> g(ban_mu);
