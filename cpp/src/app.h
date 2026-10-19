@@ -21,6 +21,7 @@ extern Config cfg;
 bool load_config(const std::string &base_dir);
 bool save_config();
 void handle(http::Request &rq, http::Response &rs);   // top-level request handler
+bool body_gate(const http::Request &rq, http::Response &rs);   // login check before big bodies are read
 // shared response helpers (apply the security headers)
 void send_json(const http::Request &rq, http::Response &rs, const json::Value &v, int code = 200);
 void err_json(const http::Request &rq, http::Response &rs, const std::string &msg, int code);

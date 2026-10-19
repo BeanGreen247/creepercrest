@@ -414,6 +414,15 @@ static bool gate(http::Request &rq, http::Response &rs, Session &sess) {
     return false;
 }
 
+bool body_gate(const http::Request &rq, http::Response &rs) {
+    if (rq.method == "GET" || rq.method == "HEAD") return true;
+    if (cfg.auth_disabled || lan_open(rq)) return true;
+    Session s;
+    if (get_session(rq.cookie("cc_session"), s) && auth::load_users().find(s.user)) return true;
+    err_json(rq, rs, "login required", 401);
+    return false;
+}
+
 void handle(http::Request &rq, http::Response &rs) {
     Session sess;
     if (rq.method != "GET" && rq.method != "POST" && rq.method != "DELETE" && rq.method != "HEAD") {

@@ -126,6 +126,8 @@ bool send_simple(Conn &c, int code, const char *msg) {
 
 bool ieq(const std::string &a, const char *b) { return strcasecmp(a.c_str(), b) == 0; }
 
+bool write_response(Conn &c, Request &rq, Response &rs, bool keep);
+
 // Reads one request. Returns 0 ok, 1 clean close, 2 error already answered.
 int read_request(Conn &c, const Options &opt, Request &rq) {
     std::string &buf = c.rbuf;
@@ -175,6 +177,10 @@ int read_request(Conn &c, const Options &opt, Request &rq) {
         len = (size_t)v;
     }
     rq.body_len = len;
+    if (len > kPreAuthBody && opt.body_gate) {   // never buffer a big body for someone who is not allowed to send one
+        Response gate_rs;
+        if (!opt.body_gate(rq, gate_rs)) { write_response(c, rq, gate_rs, false); return 2; }
+    }
     if (len <= kMemBody) {
         while (buf.size() < len) {
             ssize_t n = c.rd(tmp, sizeof tmp);

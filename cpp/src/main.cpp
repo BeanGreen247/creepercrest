@@ -30,6 +30,7 @@ int main(int argc, char **argv) {
     registry::load();
     http::Options opt;
     opt.spool_dir = base;
+    opt.body_gate = app::body_gate;
     opt.host = app::cfg.host;
     opt.port = app::cfg.port;
     opt.tls_cert = app::cfg.tls_cert;

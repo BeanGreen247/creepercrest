@@ -37,7 +37,13 @@ constexpr size_t kMemBody = 1 << 20;
 
 using Handler = std::function<void(Request &, Response &)>;
 
+// Called after the request headers are parsed and before a body larger than kPreAuthBody is read.
+// Return false (with rs filled in) to refuse it; the connection is then closed without reading the body.
+using BodyGate = std::function<bool(const Request &, Response &)>;
+constexpr size_t kPreAuthBody = 64 * 1024;
+
 struct Options {
+    BodyGate body_gate;
     std::string host = "0.0.0.0";
     int port = 8888;
     std::string tls_cert, tls_key;
