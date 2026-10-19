@@ -4467,6 +4467,8 @@ def main():
     if TLS_ON:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.set_ciphers("ECDHE+AESGCM:ECDHE+CHACHA20")     # TLS 1.2 only with forward secrecy and authenticated encryption
+        ctx.options |= ssl.OP_CIPHER_SERVER_PREFERENCE | ssl.OP_NO_COMPRESSION
         ctx.load_cert_chain(os.path.expanduser(cfg["tls_cert"]), os.path.expanduser(cfg["tls_key"]))
         httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
     print(f"CreeperCrest  →  {'https' if TLS_ON else 'http'}://{host}:{port}")

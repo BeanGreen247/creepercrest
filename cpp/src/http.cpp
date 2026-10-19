@@ -338,6 +338,9 @@ int listen_on(const Options &opt, std::string &err) {
     if (!opt.tls_cert.empty() && !opt.tls_key.empty()) {
         tls = SSL_CTX_new(TLS_server_method());
         SSL_CTX_set_min_proto_version(tls, TLS1_2_VERSION);
+        // TLS 1.2 only with forward secrecy and authenticated encryption (TLS 1.3 suites are always strong)
+        SSL_CTX_set_cipher_list(tls, "ECDHE+AESGCM:ECDHE+CHACHA20");
+        SSL_CTX_set_options(tls, SSL_OP_CIPHER_SERVER_PREFERENCE | SSL_OP_NO_RENEGOTIATION | SSL_OP_NO_COMPRESSION);
         if (SSL_CTX_use_certificate_chain_file(tls, opt.tls_cert.c_str()) != 1 ||
             SSL_CTX_use_PrivateKey_file(tls, opt.tls_key.c_str(), SSL_FILETYPE_PEM) != 1) {
             err = "cannot load TLS certificate/key";
