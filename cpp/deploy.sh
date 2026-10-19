@@ -74,7 +74,7 @@ pick_jdk() {
 }
 
 if [ -z "$PKG" ]; then
-    echo "  Unsupported package manager - make sure g++, make, OpenSSL and libzip (dev packages), OpenJDK and ufw are installed."
+    echo "  Unsupported package manager - make sure g++, make, the openssl command, OpenSSL and libzip (dev packages), OpenJDK and ufw are installed."
 else
     if [ ! -x "$SCRIPT_DIR/creepercrest" ]; then
         echo "  Installing build tools (g++, make, OpenSSL and libzip headers)..."
@@ -97,6 +97,7 @@ else
     fi
 
     command -v qrencode &>/dev/null || { echo "  Installing qrencode (QR codes for 2FA enrolment, on screen and in the web page)..."; pkg_install qrencode || true; }
+    command -v openssl &>/dev/null || { echo "  Installing openssl (needed to create the HTTPS certificate)..."; pkg_install openssl || true; }
 
     if [ "$SKIP_FW" = 1 ]; then
         echo "  ufw   → skipped (CC_SKIP_FIREWALL)"
