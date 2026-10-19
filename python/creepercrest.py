@@ -962,8 +962,20 @@ def _prune_fails(key):
     _fails[key] = [t for t in _fails.get(key, []) if t > cutoff]
     return _fails[key]
 
+# Addresses a user has logged in from successfully. Failed guesses from strangers can lock the account for new
+# addresses, but never for the owner's usual ones, so an attacker cannot lock the owner out.
+_known_ips = {}
+
+def remember_ip(user, ip):
+    ips = _known_ips.setdefault(user, [])
+    if ip not in ips:
+        ips.append(ip)
+        del ips[:-8]
+
 def login_throttled(ip, user):
-    return len(_prune_fails("ip:" + ip)) >= _FAIL_IP or len(_prune_fails("user:" + user)) >= _FAIL_USER
+    if len(_prune_fails("ip:" + ip)) >= _FAIL_IP:
+        return True
+    return ip not in _known_ips.get(user, []) and len(_prune_fails("user:" + user)) >= _FAIL_USER
 
 def record_login_failure(ip, user):
     for key in ("ip:" + ip, "user:" + user):
@@ -3584,6 +3596,7 @@ class Handler(BaseHTTPRequestHandler):
         pw_ok   = verify_password(pw, rec["pw"] if rec else _DUMMY_HASH)
         step    = verify_totp(rec["totp"] if rec else _DUMMY_TOTP, code, user if rec else None)
         if rec and pw_ok and step and consume_totp(user, step):
+            remember_ip(user, ip)
             print(f"[auth] login ok user={user} ip={ip}", flush=True)
             return self._redirect("/", self._cookie(create_session(user), SESSION_MAX))
         record_login_failure(ip, user)

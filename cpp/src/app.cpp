@@ -111,9 +111,24 @@ static std::vector<int64_t> &prune_fails(const std::string &key) {   // caller h
     return v;
 }
 
+// Addresses a user has logged in from successfully. Failed guesses from strangers can lock the account for new
+// addresses, but never for the owner's usual ones, so an attacker cannot lock the owner out.
+static std::map<std::string, std::vector<std::string>> known_ips;
+
+static void remember_ip(const std::string &user, const std::string &ip) {
+    std::lock_guard<std::mutex> g(sess_mu);
+    auto &v = known_ips[user];
+    if (std::find(v.begin(), v.end(), ip) != v.end()) return;
+    v.push_back(ip);
+    if (v.size() > 8) v.erase(v.begin());
+}
+
 static bool login_throttled(const std::string &ip, const std::string &user) {
     std::lock_guard<std::mutex> g(sess_mu);
-    return (int)prune_fails("ip:" + ip).size() >= FAIL_IP || (int)prune_fails("user:" + user).size() >= FAIL_USER;
+    if ((int)prune_fails("ip:" + ip).size() >= FAIL_IP) return true;
+    auto it = known_ips.find(user);
+    bool known = it != known_ips.end() && std::find(it->second.begin(), it->second.end(), ip) != it->second.end();
+    return !known && (int)prune_fails("user:" + user).size() >= FAIL_USER;
 }
 
 static void record_failure(const std::string &ip, const std::string &user) {
@@ -385,6 +400,7 @@ static void login_attempt(const http::Request &rq, http::Response &rs) {
     bool pw_ok = auth::verify_password(form["password"], rec ? rec->str("pw") : dummy_hash());
     uint64_t step = auth::verify_totp(rec ? rec->str("totp") : DUMMY_TOTP, form["totp"], rec ? user : "");
     if (rec && pw_ok && step && auth::consume_totp(user, step)) {
+        remember_ip(user, ip);
         log_line("auth", "login ok user=" + user + " ip=" + ip);
         return redirect(rq, rs, "/", session_cookie(rq, create_session(user), SESSION_MAX));
     }
