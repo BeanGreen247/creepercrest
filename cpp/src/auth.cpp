@@ -114,9 +114,12 @@ uint64_t verify_totp(const std::string &secret, const std::string &code_in, cons
     return found;
 }
 
-void mark_totp_used(const std::string &user, uint64_t step) {
+bool consume_totp(const std::string &user, uint64_t step) {
     std::lock_guard<std::mutex> g(totp_mu);
-    totp_last[user] = step;
+    uint64_t &last = totp_last[user];
+    if (step <= last) return false;
+    last = step;
+    return true;
 }
 
 std::string totp_uri(const std::string &user, const std::string &secret) {

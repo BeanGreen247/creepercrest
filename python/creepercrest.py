@@ -906,7 +906,7 @@ def totp_at(secret, counter):
 _totp_last = {}   # username -> last accepted time step (blocks code replay)
 
 def verify_totp(secret, code, user=None):
-    """Return the matching time step (truthy) or 0. Does not consume it - call mark_totp_used after a full login."""
+    """Return the matching time step (truthy) or 0. Does not claim it - call consume_totp once the whole login is accepted."""
     code = re.sub(r"\s", "", code or "")
     if not re.fullmatch(r"\d{6}", code):
         return 0
@@ -916,8 +916,16 @@ def verify_totp(secret, code, user=None):
             found = step
     return found
 
-def mark_totp_used(user, step):
-    _totp_last[user] = step
+_totp_lock = threading.Lock()
+
+def consume_totp(user, step):
+    """Atomically claim a time step: False if it (or a later one) was already used, so one code cannot open
+    two sessions even when two requests carry it at the same moment."""
+    with _totp_lock:
+        if step <= _totp_last.get(user, 0):
+            return False
+        _totp_last[user] = step
+        return True
 
 def totp_uri(user, secret):
     return (f"otpauth://totp/CreeperCrest:{quote(user)}?secret={secret}"
@@ -3563,8 +3571,7 @@ class Handler(BaseHTTPRequestHandler):
         rec = load_users().get(user)
         pw_ok   = verify_password(pw, rec["pw"] if rec else _DUMMY_HASH)
         step    = verify_totp(rec["totp"] if rec else _DUMMY_TOTP, code, user if rec else None)
-        if rec and pw_ok and step:
-            mark_totp_used(user, step)
+        if rec and pw_ok and step and consume_totp(user, step):
             print(f"[auth] login ok user={user} ip={ip}", flush=True)
             return self._redirect("/", self._cookie(create_session(user), SESSION_MAX))
         record_login_failure(ip, user)

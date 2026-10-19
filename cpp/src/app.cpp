@@ -384,8 +384,7 @@ static void login_attempt(const http::Request &rq, http::Response &rs) {
     const json::Value *rec = users.find(user);
     bool pw_ok = auth::verify_password(form["password"], rec ? rec->str("pw") : dummy_hash());
     uint64_t step = auth::verify_totp(rec ? rec->str("totp") : DUMMY_TOTP, form["totp"], rec ? user : "");
-    if (rec && pw_ok && step) {
-        auth::mark_totp_used(user, step);
+    if (rec && pw_ok && step && auth::consume_totp(user, step)) {
         log_line("auth", "login ok user=" + user + " ip=" + ip);
         return redirect(rq, rs, "/", session_cookie(rq, create_session(user), SESSION_MAX));
     }
