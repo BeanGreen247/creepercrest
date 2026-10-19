@@ -75,10 +75,17 @@ class Job:
         return {"state": self.state, "label": self.label, "unit": self.unit, "done": self.done,
                 "total": self.total, "result": self.result, "error": self.error}
 
+MAX_RUNNING_JOBS = 8
+
+class BusyError(Exception):
+    """Too many background tasks are already running."""
+
 def start_job(label, fn, unit="bytes"):
     """Run fn(job) in a thread; the UI polls /api/job/<id> for progress."""
     job = Job(label, unit)
     with _jobs_lock:
+        if sum(1 for j in _jobs.values() if j.state == "running") >= MAX_RUNNING_JOBS:
+            raise BusyError()
         for k in [k for k, j in _jobs.items() if j.state != "running" and time.time() - j.t > 600]:
             del _jobs[k]
         _jobs[job.id] = job
@@ -3854,6 +3861,12 @@ class Handler(BaseHTTPRequestHandler):
     # ── POST ───────────────────────────────────────────────────────────────────
 
     def do_POST(self):
+        try:
+            self._post()
+        except BusyError:
+            self.send_json({"error": "Too many running tasks, wait for one to finish"}, 429)
+
+    def _post(self):
         if self.gate("POST"):
             return
         parts = self.segs()

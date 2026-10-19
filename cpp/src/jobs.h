@@ -4,6 +4,7 @@
 #include <atomic>
 #include <functional>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 
 namespace jobs {
@@ -18,6 +19,10 @@ struct Job {
     void set_label(const std::string &l) { std::lock_guard<std::mutex> g(mu); label = l; }
     void set_unit(const std::string &u, int64_t tot) { std::lock_guard<std::mutex> g(mu); unit = u; total = tot; done = 0; }
 };
+
+// Thrown by start() when too many tasks are already running.
+struct Busy : std::runtime_error { Busy() : std::runtime_error("Too many running tasks, wait for one to finish") {} };
+constexpr int kMaxRunning = 8;
 
 // fn throws std::exception to report failure; its message becomes the job error.
 std::string start(const std::string &label, std::function<json::Value(Job &)> fn, const std::string &unit = "bytes");

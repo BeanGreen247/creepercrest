@@ -20,6 +20,9 @@ std::string start(const std::string &label, std::function<json::Value(Job &)> fn
     job->t = (int64_t)time(nullptr);
     {
         std::lock_guard<std::mutex> g(mu);
+        int running = 0;
+        for (auto &kv : all) { std::lock_guard<std::mutex> jg(kv.second->mu); if (kv.second->state == "running") running++; }
+        if (running >= kMaxRunning) throw Busy();
         int64_t now = (int64_t)time(nullptr);
         for (auto it = all.begin(); it != all.end();) {
             bool old;

@@ -864,6 +864,9 @@ bool handle(Request &rq, Response &rs, const std::string &ip) {
         if (rq.method == "GET") return do_get(rq, rs, p, ip);
         if (rq.method == "POST") return do_post(rq, rs, p, ip);
         if (rq.method == "DELETE") return do_delete(rq, rs, p);
+    } catch (const jobs::Busy &e) {
+        fail(rq, rs, e.what(), 429);
+        return true;
     } catch (const Bad &e) {
         fail(rq, rs, e.what(), e.code);
         return true;
