@@ -31,6 +31,27 @@ Build and run by hand with `make -C cpp && cpp/creepercrest`. It keeps `config.j
 
 The Python version in `python/` and the C++ version in `cpp/` share the same install folder (`~/creepercrest`), the same `creepercrest` systemd service, the same port, and the same `config.json` and `users.json`. Only one of them can run at a time. The page header tells you which one you are talking to: a green **C++ BACKEND** pill, or an amber **PYTHON BACKEND** pill.
 
+### Updating a clone you deployed from (when `git pull` stops)
+
+If you installed by running `deploy.sh` inside your clone, your live `config.json` sits in the repository folder. Older versions kept `config.json` and `creepercrest.service` in the repository root, and they now live in `python/`, so `git pull` stops with "Your local changes to the following files would be overwritten". Back your files up, let the pull go through, then put your config back and redeploy. After the pull the Python script has moved too, so redeploy right away: the running service keeps working, but the next restart or reboot fails until you do.
+
+Stay on Python:
+
+```bash
+cd ~/creepercrest
+cp config.json ~/config.json.bak
+cp users.json ~/users.json.bak
+cp creepercrest.service ~/creepercrest.service.bak
+git checkout -- config.json creepercrest.service
+git pull
+cp ~/config.json.bak config.json
+sudo bash python/deploy.sh
+```
+
+Switch to C++ instead: run the same first six lines, then `cd cpp && sudo bash deploy.sh`.
+
+Restoring `config.json` is what brings your servers back; without it the installer creates an empty config. `users.json` is not tracked by git, so your logins and 2FA are untouched. The installer writes the real service file under `/etc/systemd/system` itself, so the `creepercrest.service` backup only matters if you edited that template on purpose. Because the clone and the install are the same folder, the installer leaves `creepercrest.py`, `static/` and `config.json` as untracked files in the repository root; that is harmless, or clone a second copy elsewhere to pull from.
+
 ### Already running the Python version
 
 Nothing breaks and nothing needs doing. The installed copy keeps running. After a `git pull`, the Python installer lives in `python/`, so update it with:
