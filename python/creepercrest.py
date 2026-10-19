@@ -3563,6 +3563,9 @@ class Handler(BaseHTTPRequestHandler):
     def gate(self, method):
         """Return True if the request was answered (login page, redirect, 401...); sets self.sess otherwise."""
         self.sess = {"user": "(auth disabled)", "csrf": ""}
+        if len(self.headers.get_all("Content-Length") or []) > 1 or len(self.headers.get_all("Host") or []) > 1:
+            self.send_json({"error": "duplicate header"}, 400)     # peers could read two values differently
+            return True
         path = urlparse(self.path).path
         if method == "POST" and int(self.headers.get("Content-Length", 0) or 0) > MAX_UPLOAD:
             self.send_json({"error": "request too large"}, 413)

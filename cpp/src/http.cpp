@@ -194,6 +194,10 @@ int read_request(Conn &c, const Options &opt, Request &rq, bool first) {
         std::string k = h.substr(0, col), v = h.substr(col + 1);
         for (auto &ch : k) ch = (char)tolower((unsigned char)ch);
         size_t a = v.find_first_not_of(" \t"), b = v.find_last_not_of(" \t");
+        if ((k == "content-length" || k == "host") && rq.header(k.c_str())) {   // two values: peers could read them differently
+            send_simple(c, 400, "duplicate header");
+            return 2;
+        }
         rq.headers.emplace_back(k, a == std::string::npos ? "" : v.substr(a, b - a + 1));
     }
     if (rq.header("transfer-encoding")) { send_simple(c, 501, "chunked bodies unsupported"); return 2; }
