@@ -3545,7 +3545,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "same-origin")
         self.send_header("Content-Security-Policy",
-                         "base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'")
+                         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
         if TLS_ON or self.headers.get("X-Forwarded-Proto", "") == "https":
             self.send_header("Strict-Transport-Security", "max-age=31536000")
 
