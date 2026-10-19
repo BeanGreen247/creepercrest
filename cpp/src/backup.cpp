@@ -67,7 +67,8 @@ Value create(const std::string &sid, jobs::Job *job) {
     auto srv = registry::get(sid);
     if (!srv) throw std::runtime_error("Server not found");
     std::string src = srv->directory(), bak = dir();
-    fsu::mkdirs(bak);
+    fsu::mkdirs(bak, 0700);
+    chmod(bak.c_str(), 0700);   // backups hold whole servers: keep them private (best effort on a folder we may not own)
     std::string fname = sid + "-" + fsu::now_str("%Y%m%d-%H%M%S") + ".zip", fpath = bak + "/" + fname;
     std::vector<std::pair<std::string, std::string>> files;
     walk(src, "", files, true);
@@ -78,6 +79,7 @@ Value create(const std::string &sid, jobs::Job *job) {
         unlink(fpath.c_str());
         throw;
     }
+    chmod(fpath.c_str(), 0600);
     double mb = fsu::round_to((double)fsu::file_size(fpath) / 1024 / 1024, 2);
     srv->append("[CreeperCrest] Backup saved -> " + fpath + "  (" + std::to_string(mb).substr(0, std::to_string(mb).find('.') + 3) + " MB)");
     prune(sid, bak);

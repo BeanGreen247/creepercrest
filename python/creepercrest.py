@@ -51,8 +51,11 @@ def load_cfg():
         return json.load(f)
 
 def save_cfg(data):
-    with open(CFG_FILE, "w", encoding="utf-8") as f:
+    tmp = CFG_FILE + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)     # private: it names every server folder
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+    os.replace(tmp, CFG_FILE)
 
 # ── Background jobs (progress reporting) ───────────────────────────────────────
 
@@ -1152,7 +1155,11 @@ def do_backup(sid, job=None):
     srv     = servers[sid]
     src     = os.path.expanduser(srv.cfg.get("directory", ""))
     bak_dir = os.path.expanduser(cfg.get("backup_dir", "~/mc-backups"))
-    os.makedirs(bak_dir, exist_ok=True)
+    os.makedirs(bak_dir, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(bak_dir, 0o700)      # backups hold whole servers: keep them private
+    except OSError:
+        pass
     ts      = datetime.now().strftime("%Y%m%d-%H%M%S")
     fname   = f"{sid}-{ts}.zip"
     fpath   = os.path.join(bak_dir, fname)
@@ -1173,6 +1180,7 @@ def do_backup(sid, job=None):
                 zf.write(fp, os.path.relpath(fp, src))
                 if job:
                     job.done += size
+        os.chmod(fpath, 0o600)
         size_mb = round(os.path.getsize(fpath) / 1024 / 1024, 2)
         srv._append(f"[CreeperCrest] Backup saved → {fpath}  ({size_mb} MB)")
         _prune_backups(sid, bak_dir)

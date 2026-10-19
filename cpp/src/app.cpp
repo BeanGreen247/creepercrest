@@ -6,6 +6,7 @@
 #include "server.h"
 #include "util.h"
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <algorithm>
@@ -44,10 +45,16 @@ std::string expand_home(const std::string &p) {
 
 bool save_config() {
     std::string tmp = cfg.base_dir + "/config.json.tmp", data = json::dump(cfg.raw, 2);
-    FILE *f = fopen(tmp.c_str(), "wb");
-    if (!f) return false;
-    bool ok = fwrite(data.data(), 1, data.size(), f) == data.size();
-    ok = fclose(f) == 0 && ok;
+    int fd = open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);   // private: it names every server folder
+    if (fd < 0) return false;
+    size_t off = 0;
+    bool ok = true;
+    while (off < data.size()) {
+        ssize_t w = write(fd, data.data() + off, data.size() - off);
+        if (w <= 0) { ok = false; break; }
+        off += (size_t)w;
+    }
+    ok = (close(fd) == 0) && ok;
     return ok && rename(tmp.c_str(), (cfg.base_dir + "/config.json").c_str()) == 0;
 }
 
