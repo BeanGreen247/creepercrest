@@ -671,6 +671,12 @@ def download_jar(jtype, ver, dest_path, job=None):
         if os.path.exists(tmp):
             os.remove(tmp)
 
+def _as_int(v, default):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
 class ManagedServer:
     def __init__(self, sid, scfg):
         self.id      = sid
@@ -821,8 +827,8 @@ class ManagedServer:
             "name":          self.cfg.get("name", self.id),
             "running":       self.is_running(),
             "pid":           self.process.pid if self.is_running() else None,
-            "memory_min_mb": self.cfg.get("memory_min_mb", legacy),
-            "memory_max_mb": self.cfg.get("memory_max_mb", legacy),
+            "memory_min_mb": _as_int(self.cfg.get("memory_min_mb", legacy), 1024),
+            "memory_max_mb": _as_int(self.cfg.get("memory_max_mb", legacy), 1024),
             "directory":     self.cfg.get("directory", ""),
             "jar":           self.cfg.get("jar", "server.jar"),
             "runtime":       self.cfg.get("runtime", "java"),
@@ -844,7 +850,13 @@ class ManagedServer:
 # ── Global state ───────────────────────────────────────────────────────────────
 
 cfg     = load_cfg()
-servers = {sid: ManagedServer(sid, sc) for sid, sc in cfg.get("servers", {}).items()}
+def _valid_sid(sid):
+    return bool(re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", str(sid)))
+
+# ids end up in page markup and URLs, so a hand-edited config must not smuggle in odd ones
+for _bad in [k for k in cfg.get("servers", {}) if not _valid_sid(k)]:
+    print("WARNING: ignoring server with an invalid id in config.json (allowed: a-z, 0-9, dash)", file=sys.stderr)
+servers = {sid: ManagedServer(sid, sc) for sid, sc in cfg.get("servers", {}).items() if _valid_sid(sid)}
 
 # ── Authentication (password + TOTP 2FA) ───────────────────────────────────────
 

@@ -12,7 +12,13 @@ void load() {
     std::lock_guard<std::recursive_mutex> g(mu);
     servers.clear();
     if (auto *s = app::cfg.raw.find("servers"); s && s->is_obj())
-        for (auto &kv : s->o) servers.emplace_back(kv.first, std::make_shared<ManagedServer>(kv.first, kv.second));
+        for (auto &kv : s->o) {
+            const std::string &id = kv.first;   // ids end up in page markup and URLs, so a hand-edited config must not smuggle in odd ones
+            bool ok = !id.empty() && id.size() <= 32 && (isalnum((unsigned char)id[0]) && !isupper((unsigned char)id[0]));
+            for (char c : id) if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')) ok = false;
+            if (!ok) { fprintf(stderr, "WARNING: ignoring server with an invalid id in config.json (allowed: a-z, 0-9, dash)\n"); continue; }
+            servers.emplace_back(id, std::make_shared<ManagedServer>(id, kv.second));
+        }
 }
 
 std::shared_ptr<ManagedServer> get(const std::string &sid) {
