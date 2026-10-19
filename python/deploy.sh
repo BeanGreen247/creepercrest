@@ -164,12 +164,12 @@ echo "HTTPS"
 echo "  Without HTTPS, passwords, authenticator codes and session cookies cross the network unencrypted."
 echo "  A self-signed certificate encrypts the traffic; your browser will ask you to trust it once."
 if command -v openssl &>/dev/null; then
-    read -rp "Create a self-signed certificate and serve the panel over HTTPS? [y/N]: " TLS_CHOICE
+    read -rp "Create a self-signed certificate and serve the panel over HTTPS? [Y/n]: " TLS_CHOICE
 else
     TLS_CHOICE=n
     echo "  openssl is not installed, skipping (install it and set tls_cert / tls_key in config.json to enable HTTPS)."
 fi
-case "${TLS_CHOICE:-n}" in
+case "${TLS_CHOICE:-y}" in
     [yY]*)
         TLS_DIR="$TARGET_DIR/tls"
         HOSTN=$(hostname)
