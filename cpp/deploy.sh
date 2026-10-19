@@ -181,8 +181,9 @@ if [ "$SKIP_FW" = 1 ]; then
 elif [ -x "$UFW" ]; then
     CONF_PORT=$(sudo -u "$TARGET_USER" "$TARGET_DIR/creepercrest" config-get port 2>/dev/null || echo 8888)
     PANEL_PORT="${CONF_PORT:-8888}"
-    LAN=$(ip -o -4 addr show scope global 2>/dev/null | awk '{print $4; exit}')
-    LAN_NET=$(ip -o -4 route show scope link 2>/dev/null | awk '{print $1; exit}')
+    # the network of the interface that carries the default route (not a link-local 169.254.x.x route)
+    LAN_DEV=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
+    LAN_NET=$([ -n "$LAN_DEV" ] && ip -o -4 route show dev "$LAN_DEV" scope link 2>/dev/null | awk '$1 !~ /^169\.254\./ { print $1; exit }')
 
     echo ""
     echo "Firewall"
