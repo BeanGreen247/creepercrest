@@ -59,15 +59,21 @@ bool has_entry(const std::string &path, const std::string &name) {
     return ok;
 }
 
-void extract(const std::string &path, const std::string &dest, const Progress &prog, bool by_files) {
+void extract(const std::string &path, const std::string &dest, const Progress &prog, bool by_files, uint64_t limit_bytes) {
     int err = 0;
     zip_t *z = zip_open(path.c_str(), ZIP_RDONLY, &err);
     if (!z) throw std::runtime_error(zerr(err));
     std::unique_ptr<zip_t, void (*)(zip_t *)> guard(z, [](zip_t *p) { zip_close(p); });
     zip_int64_t n = zip_get_num_entries(z, 0);
     int64_t total_bytes = 0;
-    if (!by_files)
-        for (zip_int64_t i = 0; i < n; i++) { zip_stat_t st; if (zip_stat_index(z, i, 0, &st) == 0) total_bytes += (int64_t)st.size; }
+    uint64_t declared = 0;
+    if (n > 1000000) throw std::runtime_error("zip has too many entries");
+    for (zip_int64_t i = 0; i < n; i++) { zip_stat_t st; if (zip_stat_index(z, i, 0, &st) == 0) declared += st.size; }
+    if (limit_bytes && declared > limit_bytes)
+        throw std::runtime_error("zip would expand to " + std::to_string(declared >> 20) + " MB, more than the " +
+                                 std::to_string(limit_bytes >> 20) + " MB allowed");
+    if (!by_files) total_bytes = (int64_t)declared;
+    uint64_t written = 0;
     int64_t done = 0;
     int dfd = fsu::open_dir_fd(dest);
     if (dfd < 0) throw std::runtime_error("cannot open " + dest);
@@ -107,6 +113,8 @@ void extract(const std::string &path, const std::string &dest, const Progress &p
                     p += w; left -= w;
                 }
                 if (!ok) break;
+                written += (uint64_t)r;
+                if (limit_bytes && written > limit_bytes) { ok = false; zip_fclose(f); close(fd); throw std::runtime_error("zip expands past the allowed size"); }
                 if (!by_files) { done += r; if (prog) prog(done, total_bytes); }
             }
             if (r < 0) ok = false;

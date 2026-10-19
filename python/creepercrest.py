@@ -132,8 +132,23 @@ def _write_beneath(base, rel, data_iter):
         for chunk in data_iter:
             f.write(chunk)
 
+def _extract_limit(dest):
+    """Largest size an archive may expand to: max_extract_mb if set, else the free space minus a 1 GB reserve."""
+    mb = int(cfg.get("max_extract_mb", 0) or 0)
+    if mb > 0:
+        return mb << 20
+    free = shutil.disk_usage(dest).free
+    return free - (1 << 30) if free > (1 << 30) else free // 2
+
 def _extract_zip(zf, dest, job=None):
     members = zf.infolist()
+    if len(members) > 1_000_000:
+        raise RuntimeError("zip has too many entries")
+    limit = _extract_limit(dest)
+    declared = sum(m.file_size for m in members)
+    if declared > limit:                  # declared sizes first, real bytes are counted below
+        raise RuntimeError(f"zip would expand to {declared >> 20} MB, more than the {limit >> 20} MB allowed")
+    written = 0
     if job:
         job.unit, job.total, job.done = "files", len(members), 0
     for m in members:
@@ -144,7 +159,17 @@ def _extract_zip(zf, dest, job=None):
             _open_beneath(dest, name, False)
         else:
             with zf.open(m) as src:
-                _write_beneath(dest, name, iter(lambda: src.read(256 * 1024), b""))
+                def chunks():
+                    nonlocal written
+                    while True:
+                        c = src.read(256 * 1024)
+                        if not c:
+                            return
+                        written += len(c)
+                        if written > limit:
+                            raise RuntimeError("zip expands past the allowed size")
+                        yield c
+                _write_beneath(dest, name, chunks())
         if job:
             job.done += 1
 

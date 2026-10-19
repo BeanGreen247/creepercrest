@@ -1,5 +1,6 @@
 #include "registry.h"
 #include "app.h"
+#include <sys/statvfs.h>
 #include <mutex>
 
 namespace registry {
@@ -87,5 +88,16 @@ void cfg_set(const std::string &key, const json::Value &v) {
     std::lock_guard<std::recursive_mutex> g(mu);
     app::cfg.raw[key] = v;
     app::save_config();
+}
+} // namespace registry
+
+namespace registry {
+uint64_t extract_limit(const std::string &dest) {
+    int64_t mb = cfg_num("max_extract_mb", 0);
+    if (mb > 0) return (uint64_t)mb << 20;
+    struct statvfs st;
+    if (statvfs(dest.c_str(), &st) != 0) return 0;
+    uint64_t avail = (uint64_t)st.f_bavail * st.f_frsize, reserve = (uint64_t)1 << 30;
+    return avail > reserve ? avail - reserve : avail / 2;
 }
 } // namespace registry

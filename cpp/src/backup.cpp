@@ -97,7 +97,7 @@ std::string restore(const std::string &fname, const std::string &sid, jobs::Job 
     std::string dest = srv->directory();
     if (dest.empty() || !fsu::is_dir(dest)) throw std::runtime_error("Server directory not found");
     if (job) job->set_unit("files", 0);
-    zipx::extract(fpath, dest, [&](int64_t d, int64_t t) { if (job) { job->total = t; job->done = d; } });
+    zipx::extract(fpath, dest, [&](int64_t d, int64_t t) { if (job) { job->total = t; job->done = d; } }, true, registry::extract_limit(dest));
     srv->append("[CreeperCrest] Restored from backup: " + fname);
     return "Restored " + fname;
 }

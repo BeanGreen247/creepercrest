@@ -496,7 +496,7 @@ bool do_post(Request &rq, Response &rs, const std::vector<std::string> &p, const
                 fsu::mkdirs(dest);
                 j.set_unit("files", 0);
                 try {
-                    zipx::extract(fpath, dest, [&](int64_t d, int64_t t) { j.total = t; j.done = d; });
+                    zipx::extract(fpath, dest, [&](int64_t d, int64_t t) { j.total = t; j.done = d; }, true, registry::extract_limit(dest));
                 } catch (const std::exception &e) { throw std::runtime_error(std::string("failed to extract backup: ") + e.what()); }
                 registry::add(sid, scfg);
                 if (auto s = registry::get(sid)) s->append("[CreeperCrest] Created from backup: " + fname);
@@ -539,7 +539,7 @@ bool do_post(Request &rq, Response &rs, const std::vector<std::string> &p, const
                 fsu::mkdirs(dest);
                 j.set_unit("files", 0);
                 try {
-                    zipx::extract(tmp, dest, [&](int64_t d, int64_t t) { j.total = t; j.done = d; });
+                    zipx::extract(tmp, dest, [&](int64_t d, int64_t t) { j.total = t; j.done = d; }, true, registry::extract_limit(dest));
                 } catch (const std::exception &e) { throw std::runtime_error(std::string("failed to extract zip: ") + e.what()); }
                 registry::add(sid, scfg);
                 Value r = obj(); r["id"] = sid;

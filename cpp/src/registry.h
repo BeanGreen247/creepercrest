@@ -16,6 +16,8 @@ bool remove(const std::string &sid);                               // persists; 
 void persist(const std::string &sid, const json::Value &scfg);     // after a config edit
 void stop_all();
 fetch::Policy fetch_policy();
+// Largest size an archive may expand to in `dest`: max_extract_mb if set, else the free space there minus a 1 GB reserve.
+uint64_t extract_limit(const std::string &dest);
 std::string cfg_str(const char *key, const std::string &def = "");
 json::Value cfg_get(const char *key);                                // copy of a top-level config value
 void cfg_set(const std::string &key, const json::Value &v);        // set + save config.json
