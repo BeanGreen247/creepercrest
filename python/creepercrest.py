@@ -24,6 +24,7 @@ import secrets
 import struct
 from html import escape as html_escape
 from http.cookies import SimpleCookie
+import http.client
 import urllib.request
 from datetime import datetime
 from collections import deque
@@ -489,16 +490,52 @@ def install_resource_pack(srv, data, host):
     srv._append(f"[CreeperCrest] Resource pack installed ({len(data)//1024} KB), hosted at {srv.cfg['resource_pack']}")
     return True, srv.cfg["resource_pack"]
 
+def _vetted_infos(host, port):
+    """Resolve host once and refuse private/loopback/link-local results (SSRF), unless allow_private_fetch is set.
+    The connection is then made to exactly these addresses, so a DNS answer that changes in between cannot redirect it."""
+    infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    if not cfg.get("allow_private_fetch"):      # deliberately not tied to LAN mode: that mode skips the login
+        for info in infos:
+            if not ipaddress.ip_address(info[4][0].split("%")[0]).is_global:
+                raise ValueError("refusing to fetch from a private or internal address")
+    return infos
+
 def _assert_public_url(url):
-    """Refuse URLs that resolve to loopback/private/link-local addresses (SSRF), unless allow_private_fetch is set."""
-    if cfg.get("allow_private_fetch"):      # deliberately not tied to LAN mode: that mode skips the login
-        return
     host = urlparse(url).hostname
     if not host:
         raise ValueError("invalid URL")
-    for info in socket.getaddrinfo(host, None):
-        if not ipaddress.ip_address(info[4][0].split("%")[0]).is_global:
-            raise ValueError("refusing to fetch from a private or internal address")
+    _vetted_infos(host, None)
+
+class _PinnedConn:
+    """Mixin for http.client connections: connect only to addresses that passed _vetted_infos."""
+    def _pinned_socket(self):
+        last = OSError("connect failed")
+        for fam, typ, proto, _, sa in _vetted_infos(self.host, self.port):
+            sock = socket.socket(fam, typ, proto)
+            try:
+                sock.settimeout(self.timeout)
+                sock.connect(sa)
+                return sock
+            except OSError as e:
+                last = e
+                sock.close()
+        raise last
+
+class _PinnedHTTP(_PinnedConn, http.client.HTTPConnection):
+    def connect(self):
+        self.sock = self._pinned_socket()
+
+class _PinnedHTTPS(_PinnedConn, http.client.HTTPSConnection):
+    def connect(self):
+        self.sock = self._context.wrap_socket(self._pinned_socket(), server_hostname=self.host)
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_PinnedHTTP, req)
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_PinnedHTTPS, req, context=self._context)
 
 class _SafeRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -507,7 +544,7 @@ class _SafeRedirect(urllib.request.HTTPRedirectHandler):
         _assert_public_url(newurl)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
-_opener = urllib.request.build_opener(_SafeRedirect)
+_opener = urllib.request.build_opener(_PinnedHTTPHandler, _PinnedHTTPSHandler, _SafeRedirect)
 
 def _stream(url, write, job=None, limit=None):
     """Stream url into write(); socket timeout is per read, so a stalled host errors out instead of hanging."""
