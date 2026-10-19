@@ -183,6 +183,7 @@ cpp/src/               C++ sources: HTTP server, auth and 2FA, process manager, 
 cpp/ui/                web UI (index.html) and the built-in editor (editor.js), embedded in the binary
 cpp/deploy.sh          installer for the C++ version
 cpp/creepercrest.service  systemd unit template
+tests/                 security regression tests that run against either version
 python/                original Python version: creepercrest.py, static/ (CodeMirror bundle), deploy.sh, service file, default config.json
 deploy.sh              installer
 creepercrest.service   systemd unit template
@@ -190,6 +191,32 @@ config.json            settings
 ```
 
 Backups are stored outside the project, in `~/mc-backups`.
+
+## Security
+
+CreeperCrest is a single-owner admin tool. Every login is a full administrator of the account the panel runs as: the **native runtime** starts any program you point it at, the folder picker can browse the whole disk, and a server's folder can be any path. Share a login only with people you would give a shell on that machine. Keep the panel on your LAN or behind a VPN, and serve it over HTTPS: without it, passwords, authenticator codes and session cookies cross the network unencrypted. `deploy.sh` offers to create a self-signed certificate for you.
+
+What the panel does for you:
+
+- Passwords are hashed with scrypt, 2FA codes can be used once, and logins are throttled per address and per user. Failed guesses from strangers cannot lock you out of an address you already log in from.
+- Every state-changing request needs a CSRF token, cookies are `HttpOnly` and `SameSite=Strict`, and the pages are served with a content-security policy, frame and cross-origin isolation headers, and HSTS when HTTPS is on.
+- The authenticator key is only shown after you type your password again.
+- Files are written without following symlinks, paths are confined to the server folder, zips cannot escape or expand past `max_extract_mb` (default: free disk space minus 1 GB), and removing a server never deletes your home folder or the panel.
+- Downloads (JARs, resource packs) refuse private and loopback addresses and connect only to the address that passed the check; `allow_private_fetch` turns that off on purpose.
+- `config.json`, backups and the backup folder are private to the panel user, and at most 8 background tasks run at once.
+- Only the server's own "not whitelisted" messages trigger the automatic bans, never chat text.
+- HTTPS uses TLS 1.2 or 1.3 with forward-secret AES-GCM or ChaCha20 suites only.
+- The systemd unit written by `deploy.sh` makes system paths read-only and limits devices, namespaces, sockets and capabilities. A real Paper server runs, downloads and backs up under it.
+
+Known limits: the pages still use inline scripts, so the content-security policy cannot forbid them and output escaping is what prevents script injection; files that the panel itself rewrites inside a server folder (for example `server.properties`) follow a symlink if you deliberately made one; and all logins are equal administrators.
+
+Run the security regression tests against either version (each test starts its own throwaway panel in a temporary folder):
+
+```bash
+python3 tests/security_regression.py --backend cpp       # needs cpp/creepercrest built
+python3 tests/security_regression.py --backend python
+python3 tests/security_regression.py --backend cpp --only forged_ban,symlink_upload
+```
 
 ## Support
 
