@@ -883,18 +883,6 @@ def totp_uri(user, secret):
     return (f"otpauth://totp/CreeperCrest:{quote(user)}?secret={secret}"
             "&issuer=CreeperCrest&algorithm=SHA1&digits=6&period=30")
 
-def qr_svg_img(uri):
-    """Inline QR code if the optional `qrcode` module is installed, else ''."""
-    try:
-        import qrcode, qrcode.image.svg
-        buf = io.BytesIO()
-        qrcode.make(uri, image_factory=qrcode.image.svg.SvgFillImage).save(buf)
-        b64 = base64.b64encode(buf.getvalue()).decode()
-        return (f'<img src="data:image/svg+xml;base64,{b64}" width="200" height="200" alt="TOTP QR code" '
-                'style="display:block;background:#fff;padding:8px;border-radius:6px"/>')
-    except Exception:
-        return ""
-
 def qr_ascii(uri):
     """Terminal QR via `qrencode` if installed, else None."""
     try:
@@ -981,18 +969,49 @@ def render_setup_required():
 <p style="margin-top:.8rem"><code>python3 creepercrest.py adduser yourname</code></p>
 <p style="margin-top:.8rem">Then reload this page.</p></div></body></html>"""
 
-def render_2fa_setup(user):
-    rec = load_users().get(user)
-    if not rec:
+_2FA_PAGE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Creeper Crest - 2FA</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%233eae30'/%3E%3C/svg%3E">
+<style>__CSS__</style></head><body><div class="card"><h1>Two-factor authentication</h1>
+<p style="color:#3fb950;font-weight:600">2FA is active for __USER__</p>
+<div id="gate"><p style="margin:.8rem 0">To add this account to an authenticator app, confirm your password.</p>
+<label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password">
+<button id="go" type="button">Show setup key</button><p id="msg" style="color:#f85149;margin-top:.6rem"></p></div>
+<div id="key" style="display:none"></div>
+<p style="margin-top:1rem"><a href="/">Back to panel</a></p></div>
+<script>const CSRF='__CSRF__';
+const q=id=>document.getElementById(id);
+async function show(){q('msg').textContent='';
+const r=await fetch('/api/2fa',{method:'POST',headers:{'Content-Type':'application/json','X-CC-CSRF':CSRF},body:JSON.stringify({password:q('pw').value})});
+const j=await r.json();q('pw').value='';
+if(!r.ok){q('msg').textContent=j.error||'Failed';return}
+q('gate').style.display='none';const k=q('key');k.style.display='';k.textContent='';
+const add=(tag,text,css)=>{const e=document.createElement(tag);e.textContent=text;if(css)e.style.cssText=css;k.appendChild(e);return e};
+if(j.qr){const i=document.createElement('img');i.src='data:image/svg+xml;base64,'+j.qr;i.width=200;i.height=200;i.alt='TOTP QR code';i.style.cssText='display:block;background:#fff;padding:8px;border-radius:6px';k.appendChild(i)}
+const a=add('p','Enter the setup key manually, or open this link on your phone: ');const l=document.createElement('a');l.textContent='add to authenticator';l.href=j.uri;a.appendChild(l);
+add('label','Setup key (manual entry)');add('code',j.secret,'display:block;padding:.5rem')}
+q('go').addEventListener('click',show);q('pw').addEventListener('keydown',e=>{if(e.key==='Enter')show()});</script></body></html>"""
+
+def render_2fa_setup(user, csrf):
+    """The page never contains the secret: a stolen session cookie alone must not be enough to read it.
+    The secret comes from POST /api/2fa after the password is typed again."""
+    if not load_users().get(user):
         return render_setup_required()
-    uri = totp_uri(user, rec["totp"])
-    qr  = qr_svg_img(uri) or "<p>Install the optional <code>qrcode</code> Python module to show a QR code here, or enter the key manually.</p>"
-    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Creeper Crest - 2FA</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%233eae30'/%3E%3C/svg%3E">
-<style>{_AUTH_CSS}</style></head><body><div class="card"><h1>Two-factor authentication</h1>
-<p style="color:#3fb950;font-weight:600">2FA is active for {html_escape(user)}</p>
-<p style="margin:.8rem 0">Add this account to Google Authenticator, Authy, or any TOTP app.</p>{qr}
-<label>Setup key (manual entry)</label><code style="display:block;padding:.5rem">{html_escape(rec['totp'])}</code>
-<p style="margin-top:1rem"><a href="/">Back to panel</a></p></div></body></html>"""
+    return (_2FA_PAGE.replace("__CSS__", _AUTH_CSS).replace("__USER__", html_escape(user)).replace("__CSRF__", csrf))
+
+def qr_svg_b64(uri):
+    """Base64 SVG QR code via `qrencode`, or the optional `qrcode` module; '' if neither is installed."""
+    try:
+        r = subprocess.run(["qrencode", "-t", "SVG", "-m", "1", "-o", "-", uri], capture_output=True, timeout=5)
+        if r.returncode == 0 and r.stdout:
+            return base64.b64encode(r.stdout).decode()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        import qrcode, qrcode.image.svg
+        buf = io.BytesIO()
+        qrcode.make(uri, image_factory=qrcode.image.svg.SvgFillImage).save(buf)
+        return base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return ""
 
 def cli(argv):
     """User management: adduser / passwd / reset-2fa / deluser / users."""
@@ -3654,7 +3673,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if parts == ["2fa-setup"]:
-            return self.send_html(render_2fa_setup(self.sess["user"]))
+            return self.send_html(render_2fa_setup(self.sess["user"], self.sess["csrf"]))
 
         if parts == ["api", "status"]:
             return self.send_json({
@@ -3815,6 +3834,22 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"ok":true}')
             return
+
+        # /api/2fa  - reveal the authenticator secret, only after the password is typed again
+        if parts == ["api", "2fa"]:
+            ip, user = self.client_ip(), self.sess["user"]
+            if user.startswith("("):
+                return self.send_json({"error": "No account is signed in (LAN mode)"}, 400)
+            if login_throttled(ip, user):
+                return self.send_json({"error": "Too many failed attempts. Try again in 15 minutes."}, 429)
+            rec = load_users().get(user)
+            if not rec or not verify_password(str(self.body().get("password", "")), rec["pw"]):
+                record_login_failure(ip, user)
+                print(f"[auth] 2FA key request FAILED user={user!r} ip={ip}", flush=True)
+                return self.send_json({"error": "Wrong password"}, 403)
+            uri = totp_uri(user, rec["totp"])
+            print(f"[auth] 2FA key shown to user={user!r} ip={ip}", flush=True)
+            return self.send_json({"secret": rec["totp"], "uri": uri, "qr": qr_svg_b64(uri)})
 
         # /api/restore
         if parts == ["api", "restore"]:

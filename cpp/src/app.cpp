@@ -181,23 +181,30 @@ static std::string render_setup_required() {
         "<p style=\"margin-top:.8rem\">Then reload this page.</p></div>");
 }
 
-static std::string render_2fa_setup(const std::string &user) {
-    json::Value users = auth::load_users();
-    auto *rec = users.find(user);
-    if (!rec) return render_setup_required();
-    std::string secret = rec->str("totp");
-    std::string uri = auth::totp_uri(user, secret);
-    std::string qr, svg;   // inline QR when `qrencode` is installed; the key and link below always work
-    if (proc::run_capture({"qrencode", "-t", "SVG", "-m", "1", "-o", "-", uri}, &svg, nullptr, 5000) == 0 && !svg.empty())
-        qr = "<img src=\"data:image/svg+xml;base64," + util::b64_encode(svg) + "\" width=\"200\" height=\"200\" alt=\"TOTP QR code\" "
-             "style=\"display:block;background:#fff;padding:8px;border-radius:6px\"/>";
+// The page itself never contains the authenticator secret: a stolen session cookie alone must not be enough to read it.
+// The secret is fetched with POST /api/2fa after the password is typed again.
+static std::string render_2fa_setup(const std::string &user, const std::string &csrf) {
+    if (!auth::load_users().find(user)) return render_setup_required();
     return page("Creeper Crest - 2FA",
         "<div class=\"card\"><h1>Two-factor authentication</h1>\n"
         "<p style=\"color:#3fb950;font-weight:600\">2FA is active for " + util::html_escape(user) + "</p>\n"
-        "<p style=\"margin:.8rem 0\">Add this account to Google Authenticator, Authy, or any TOTP app.</p>" +
-        qr + "<p>Enter the setup key manually, or open this link on your phone: <a href=\"" + util::html_escape(uri) + "\">add to authenticator</a>.</p>\n"
-        "<label>Setup key (manual entry)</label><code style=\"display:block;padding:.5rem\">" + util::html_escape(secret) + "</code>\n"
-        "<p style=\"margin-top:1rem\"><a href=\"/\">Back to panel</a></p></div>");
+        "<div id=\"gate\"><p style=\"margin:.8rem 0\">To add this account to an authenticator app, confirm your password.</p>"
+        "<label for=\"pw\">Password</label><input id=\"pw\" type=\"password\" autocomplete=\"current-password\">"
+        "<button id=\"go\" type=\"button\">Show setup key</button><p id=\"msg\" style=\"color:#f85149;margin-top:.6rem\"></p></div>"
+        "<div id=\"key\" style=\"display:none\"></div>"
+        "<p style=\"margin-top:1rem\"><a href=\"/\">Back to panel</a></p></div>"
+        "<script>const CSRF='" + csrf + "';"
+        "const q=id=>document.getElementById(id);"
+        "async function show(){q('msg').textContent='';"
+        "const r=await fetch('/api/2fa',{method:'POST',headers:{'Content-Type':'application/json','X-CC-CSRF':CSRF},body:JSON.stringify({password:q('pw').value})});"
+        "const j=await r.json();q('pw').value='';"
+        "if(!r.ok){q('msg').textContent=j.error||'Failed';return}"
+        "q('gate').style.display='none';const k=q('key');k.style.display='';k.textContent='';"
+        "const add=(tag,text,css)=>{const e=document.createElement(tag);e.textContent=text;if(css)e.style.cssText=css;k.appendChild(e);return e};"
+        "if(j.qr){const i=document.createElement('img');i.src='data:image/svg+xml;base64,'+j.qr;i.width=200;i.height=200;i.alt='TOTP QR code';i.style.cssText='display:block;background:#fff;padding:8px;border-radius:6px';k.appendChild(i)}"
+        "const a=add('p','Enter the setup key manually, or open this link on your phone: ');const l=document.createElement('a');l.textContent='add to authenticator';l.href=j.uri;a.appendChild(l);"
+        "add('label','Setup key (manual entry)');add('code',j.secret,'display:block;padding:.5rem')}"
+        "q('go').addEventListener('click',show);q('pw').addEventListener('keydown',e=>{if(e.key==='Enter')show()});</script>");
 }
 
 static std::string acct_html(const std::string &user) {
@@ -457,7 +464,29 @@ void handle(http::Request &rq, http::Response &rs) {
             security_headers(rq, rs);
             return;
         }
-        if (p == "/2fa-setup") return send_html(rq, rs, render_2fa_setup(sess.user));
+        if (p == "/2fa-setup") return send_html(rq, rs, render_2fa_setup(sess.user, sess.csrf));
+    }
+    if (rq.method == "POST" && p == "/api/2fa") {
+        std::string ip = client_ip(rq);
+        if (sess.user.empty() || sess.user[0] == '(') return err_json(rq, rs, "No account is signed in (LAN mode)", 400);
+        if (login_throttled(ip, sess.user)) return err_json(rq, rs, "Too many failed attempts. Try again in 15 minutes.", 429);
+        std::string pw;
+        try { pw = json::parse(rq.body).str("password"); } catch (...) {}
+        json::Value users = auth::load_users();
+        const json::Value *rec = users.find(sess.user);
+        if (!rec || !auth::verify_password(pw, rec->str("pw"))) {
+            record_failure(ip, sess.user);
+            log_line("auth", "2FA key request FAILED user='" + sess.user + "' ip=" + ip);
+            return err_json(rq, rs, "Wrong password", 403);
+        }
+        std::string secret = rec->str("totp"), uri = auth::totp_uri(sess.user, secret), svg;
+        json::Value v = json::Value::object();
+        v["secret"] = secret;
+        v["uri"] = uri;
+        if (proc::run_capture({"qrencode", "-t", "SVG", "-m", "1", "-o", "-", uri}, &svg, nullptr, 5000) == 0 && !svg.empty()) v["qr"] = util::b64_encode(svg);
+        else v["qr"] = "";
+        log_line("auth", "2FA key shown to user=" + sess.user + " ip=" + ip);
+        return send_json(rq, rs, v);
     }
     if (rq.method == "POST" && p == "/logout") {
         drop_session(rq.cookie("cc_session"));

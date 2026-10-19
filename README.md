@@ -134,7 +134,7 @@ creepercrest deluser <name>
 creepercrest users
 ```
 
-Passwords are hashed with scrypt, logins are throttled, sessions last 8 h idle, and every state-changing request carries a CSRF token. The only public URL is `/resourcepack/<id>.zip`, because Minecraft clients cannot log in. Install `qrencode` to get a QR code for enrolment, both in the terminal and on the 2FA page.
+Passwords are hashed with scrypt, logins are throttled, sessions last 8 h idle, and every state-changing request carries a CSRF token. The only public URL is `/resourcepack/<id>.zip`, because Minecraft clients cannot log in. Install `qrencode` to get a QR code for enrolment, both in the terminal and on the 2FA page. The 2FA page only shows the key and QR code after you type your password again, so a stolen session cookie is not enough to read it.
 
 **LAN mode** (`creepercrest lan-mode on`) skips the login for private-network clients. Never port-forward the panel while it is on.
 
