@@ -618,11 +618,14 @@ bool do_post(Request &rq, Response &rs, const std::vector<std::string> &p, const
         for (auto &q : parts) if (q.is_file) any = true;
         if (!any) throw Bad("no files found in upload");
         fsu::mkdirs(dest);
+        int dfd = fsu::open_dir_fd(dest);
+        if (dfd < 0) throw Bad("invalid path");
+        struct DirGuard { int fd; ~DirGuard() { close(fd); } } guard{dfd};
         for (auto &q : parts) {
             if (!q.is_file) continue;
             std::string name = fsu::base_name(q.filename);
-            if (name.empty() || name == "." || name == "..") continue;
-            if (!multipart::write_part(body, q, dest + "/" + name)) throw Bad("disk write failed for " + name);
+            if (name.empty() || name == "." || name == ".." || name.find('\0') != std::string::npos) continue;
+            if (!multipart::write_part_beneath(body, q, dfd, name)) throw Bad("cannot write " + name + " (is it a link?)");
             saved++;
         }
         Value v = obj(); v["ok"] = true; v["count"] = saved;

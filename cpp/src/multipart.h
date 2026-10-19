@@ -30,6 +30,9 @@ struct Part {
 // Writes a part's bytes to path (truncating), in chunks, releasing pages as it goes. Returns false on I/O error.
 bool write_part(const Body &body, const Part &part, const std::string &path);
 
+// Same, but creates `name` beneath dirfd without ever following a symlink (uploads into a server folder).
+bool write_part_beneath(const Body &body, const Part &part, int dirfd, const std::string &name);
+
 // Returns false if the content type has no boundary.
 bool parse(const http::Request &rq, const Body &body, std::vector<Part> &parts);
 

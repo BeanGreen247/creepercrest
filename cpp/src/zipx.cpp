@@ -69,6 +69,9 @@ void extract(const std::string &path, const std::string &dest, const Progress &p
     if (!by_files)
         for (zip_int64_t i = 0; i < n; i++) { zip_stat_t st; if (zip_stat_index(z, i, 0, &st) == 0) total_bytes += (int64_t)st.size; }
     int64_t done = 0;
+    int dfd = fsu::open_dir_fd(dest);
+    if (dfd < 0) throw std::runtime_error("cannot open " + dest);
+    struct DirGuard { int fd; ~DirGuard() { close(fd); } } dir_guard{dfd};
     if (prog) prog(0, by_files ? n : total_bytes);
     std::string buf(256 * 1024, '\0');
     for (zip_int64_t i = 0; i < n; i++) {
@@ -78,12 +81,10 @@ void extract(const std::string &path, const std::string &dest, const Progress &p
         if (name.empty() && st.name[0] != 0 && strcmp(st.name, "./") != 0 && strcmp(st.name, "/") != 0)
             throw std::runtime_error(std::string("unsafe path in zip: ") + st.name);
         if (name.empty()) { done++; continue; }
-        std::string out = dest + "/" + name;
         size_t len = strlen(st.name);
         if (len && st.name[len - 1] == '/') {
-            fsu::mkdirs(out);
+            if (!fsu::mkdirs_beneath(dfd, name)) throw std::runtime_error("cannot create folder " + name + " (is it a link?)");
         } else {
-            fsu::mkdirs(fsu::dir_name(out));
             zip_file_t *f = zip_fopen_index(z, i, 0);
             if (!f) throw std::runtime_error(std::string("cannot read ") + st.name);
             zip_uint8_t opsys;
@@ -93,8 +94,8 @@ void extract(const std::string &path, const std::string &dest, const Progress &p
                 int m = (attr >> 16) & 0777;
                 if (m) mode = m | 0400;
             }
-            int fd = open(out.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, mode);
-            if (fd < 0) { zip_fclose(f); throw std::runtime_error("cannot write " + out); }
+            int fd = fsu::create_beneath(dfd, name, mode);
+            if (fd < 0) { zip_fclose(f); throw std::runtime_error("cannot write " + name + " (is it a link?)"); }
             zip_int64_t r;
             bool ok = true;
             while ((r = zip_fread(f, &buf[0], buf.size())) > 0) {
@@ -111,7 +112,7 @@ void extract(const std::string &path, const std::string &dest, const Progress &p
             if (r < 0) ok = false;
             zip_fclose(f);
             if (close(fd) != 0) ok = false;
-            if (!ok) throw std::runtime_error("write failed for " + out);
+            if (!ok) throw std::runtime_error("write failed for " + name);
         }
         if (by_files) { done++; if (prog) prog(done, n); }
     }

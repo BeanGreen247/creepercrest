@@ -124,6 +124,43 @@ int64_t file_size(const std::string &p) { struct stat st; return st_of(p, st) ? 
 int64_t mtime(const std::string &p) { struct stat st; return st_of(p, st) ? (int64_t)st.st_mtime : 0; }
 bool is_executable(const std::string &p) { return access(p.c_str(), X_OK) == 0; }
 
+int open_dir_fd(const std::string &path) { return open(path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC); }
+
+// Walks rel one component at a time. With make_file, the last component is created as a file and its fd returned;
+// otherwise every component is a directory and the final directory fd is returned.
+static int walk_beneath(int dirfd, const std::string &rel, bool make_file, int mode, int dir_mode) {
+    std::vector<std::string> parts = split(rel);
+    if (parts.empty() && make_file) return -1;
+    int cur = dup(dirfd);
+    if (cur < 0) return -1;
+    for (size_t i = 0; i < parts.size(); i++) {
+        const std::string &c = parts[i];
+        if (c == "." ) continue;
+        if (c == "..") { close(cur); return -1; }
+        bool last = i + 1 == parts.size();
+        if (last && make_file) {
+            int fd = openat(cur, c.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, mode);
+            close(cur);
+            return fd;
+        }
+        if (mkdirat(cur, c.c_str(), (mode_t)dir_mode) != 0 && errno != EEXIST) { close(cur); return -1; }
+        int next = openat(cur, c.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        close(cur);
+        if (next < 0) return -1;
+        cur = next;
+    }
+    return cur;
+}
+
+bool mkdirs_beneath(int dirfd, const std::string &rel, int mode) {
+    int fd = walk_beneath(dirfd, rel, false, 0, mode);
+    if (fd < 0) return false;
+    close(fd);
+    return true;
+}
+
+int create_beneath(int dirfd, const std::string &rel, int mode) { return walk_beneath(dirfd, rel, true, mode, 0755); }
+
 bool read_file(const std::string &p, std::string &out, size_t max) {
     int fd = open(p.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) return false;

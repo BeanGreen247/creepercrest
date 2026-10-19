@@ -22,6 +22,12 @@ int64_t file_size(const std::string &p);
 int64_t mtime(const std::string &p);
 bool is_executable(const std::string &p);
 
+// Symlink-safe creation: every path component is opened with O_NOFOLLOW relative to the directory fd, so a symlink
+// planted inside a server folder can never redirect a write outside it.
+int open_dir_fd(const std::string &path);                           // O_DIRECTORY fd, or -1
+bool mkdirs_beneath(int dirfd, const std::string &rel, int mode = 0755);
+int create_beneath(int dirfd, const std::string &rel, int mode);    // creates parents, truncates the file; -1 on any symlink/".."
+
 bool read_file(const std::string &p, std::string &out, size_t max = (size_t)-1);
 bool write_file(const std::string &p, const std::string &data, int mode = 0644);
 bool write_file_atomic(const std::string &p, const std::string &data, const std::string &mode_from = "");

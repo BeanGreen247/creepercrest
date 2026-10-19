@@ -99,12 +99,52 @@ def _expect_ok(res):
         raise RuntimeError(val)
     return val
 
+def _open_beneath(base, rel, make_file, mode=0o644):
+    """Walk rel below base one component at a time, never following a symlink, so a link planted inside a server
+    folder cannot redirect a write outside it. With make_file the last component is created and its fd returned;
+    otherwise the directories are created and closed."""
+    parts = [p for p in rel.replace("\\", "/").split("/") if p and p != "."]
+    if ".." in parts or (make_file and not parts):
+        raise OSError("unsafe path")
+    cur = os.open(base, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for i, part in enumerate(parts):
+            if make_file and i == len(parts) - 1:
+                return os.open(part, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode, dir_fd=cur)
+            try:
+                os.mkdir(part, 0o755, dir_fd=cur)
+            except FileExistsError:
+                pass
+            nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=cur)
+            os.close(cur)
+            cur = nxt
+        return None
+    finally:
+        if cur is not None:
+            try:
+                os.close(cur)
+            except OSError:
+                pass
+
+def _write_beneath(base, rel, data_iter):
+    fd = _open_beneath(base, rel, True)
+    with os.fdopen(fd, "wb") as f:
+        for chunk in data_iter:
+            f.write(chunk)
+
 def _extract_zip(zf, dest, job=None):
     members = zf.infolist()
     if job:
         job.unit, job.total, job.done = "files", len(members), 0
     for m in members:
-        zf.extract(m, dest)
+        name = m.filename
+        if name.startswith("/") or ".." in name.replace("\\", "/").split("/"):
+            raise RuntimeError(f"unsafe path in zip: {name}")
+        if name.endswith("/"):
+            _open_beneath(dest, name, False)
+        else:
+            with zf.open(m) as src:
+                _write_beneath(dest, name, iter(lambda: src.read(256 * 1024), b""))
         if job:
             job.done += 1
 
@@ -4025,9 +4065,13 @@ class Handler(BaseHTTPRequestHandler):
                 os.makedirs(dest, exist_ok=True)
                 saved = 0
                 for fname, data in files:
-                    out = os.path.join(dest, os.path.basename(fname))
-                    with open(out, "wb") as f:
-                        f.write(data)
+                    name = os.path.basename(fname)
+                    if not name or name in (".", ".."):
+                        continue
+                    try:
+                        _write_beneath(dest, name, [data])
+                    except OSError:
+                        return self.send_json({"error": f"cannot write {name} (is it a link?)"}, 400)
                     saved += 1
                 return self.send_json({"ok": True, "count": saved})
 

@@ -1,4 +1,6 @@
 #include "multipart.h"
+#include "fsu.h"
+#include <unistd.h>
 #include <sys/mman.h>
 #include <algorithm>
 #include <cstdint>
@@ -32,6 +34,23 @@ bool write_part(const Body &body, const Part &part, const std::string &path) {
         body.drop(part.data + off, n);
     }
     return fclose(f) == 0 && ok;
+}
+
+bool write_part_beneath(const Body &body, const Part &part, int dirfd, const std::string &name) {
+    int fd = fsu::create_beneath(dirfd, name, 0644);
+    if (fd < 0) return false;
+    bool ok = true;
+    const size_t step = 4 << 20;
+    for (size_t off = 0; ok && off < part.len; off += step) {
+        size_t n = std::min(step, part.len - off), done = 0;
+        while (done < n) {
+            ssize_t w = write(fd, part.data + off + done, n - done);
+            if (w <= 0) { ok = false; break; }
+            done += (size_t)w;
+        }
+        body.drop(part.data + off, n);
+    }
+    return close(fd) == 0 && ok;
 }
 
 // memmem over a big mapped region in windows, releasing pages behind the cursor.
