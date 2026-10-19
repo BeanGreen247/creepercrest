@@ -1373,7 +1373,8 @@ def _parse_multipart(raw, boundary):
         if b"\r\n\r\n" not in part:
             continue
         headers_raw, body = part.split(b"\r\n\r\n", 1)
-        body = body.rstrip(b"\r\n")
+        if body.endswith(b"\r\n"):          # only the CRLF that precedes the next boundary, never the file's own trailing newlines
+            body = body[:-2]
         cd   = ""
         for line in headers_raw.split(b"\r\n"):
             if line.lower().startswith(b"content-disposition"):
@@ -1398,7 +1399,8 @@ def _parse_multipart_full(raw, boundary):
         if b"\r\n\r\n" not in part:
             continue
         headers_raw, body = part.split(b"\r\n\r\n", 1)
-        body = body.rstrip(b"\r\n")
+        if body.endswith(b"\r\n"):          # only the CRLF that precedes the next boundary, never the file's own trailing newlines
+            body = body[:-2]
         cd   = ""
         for line in headers_raw.split(b"\r\n"):
             if line.lower().startswith(b"content-disposition"):
