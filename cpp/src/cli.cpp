@@ -3,6 +3,7 @@
 #include "app.h"
 #include "auth.h"
 #include "fsu.h"
+#include "proc.h"
 #include "util.h"
 #include <algorithm>
 #include <cstring>
@@ -23,15 +24,9 @@ static std::string read_hidden(const char *prompt) {
     return s;
 }
 
-static std::string qr_ascii(const std::string &uri) {
-    if (uri.find_first_of("'\\\n") != std::string::npos) return "";
-    std::string cmd = "qrencode -t ANSIUTF8 -m 1 '" + uri + "' 2>/dev/null", out;
-    FILE *p = popen(cmd.c_str(), "r");
-    if (!p) return "";
-    char buf[512];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof buf, p)) > 0) out.append(buf, n);
-    return pclose(p) == 0 ? out : "";
+static std::string qr_ascii(const std::string &uri) {   // argument list, no shell involved
+    std::string out;
+    return proc::run_capture({"qrencode", "-t", "ANSIUTF8", "-m", "1", uri}, &out, nullptr, 5000) == 0 ? out : "";
 }
 
 static void show(const std::string &name, const std::string &pw, bool generated, const std::string &secret) {
