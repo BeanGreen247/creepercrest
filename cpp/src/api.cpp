@@ -747,7 +747,9 @@ bool do_post(Request &rq, Response &rs, const std::vector<std::string> &p, const
             try {
                 fetch::get(url, registry::fetch_policy(), [&](const char *p, size_t n) { if (fwrite(p, 1, n, f) != n) throw std::runtime_error("disk write failed"); },
                            [&](int64_t d, int64_t t) { j.total = t; j.done = d; }, (int64_t)RP_MAX_BYTES);
-                fclose(f);
+                FILE *done = f;
+                f = nullptr;                      // closed exactly once: the catch below must not close it again
+                if (fclose(done) != 0) throw std::runtime_error("disk write failed");
                 j.set_label("Installing resource pack...");
                 j.total = 0;
                 std::string u = install_pack(srv, tmp, host);
