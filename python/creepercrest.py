@@ -3715,6 +3715,10 @@ class Handler(BaseHTTPRequestHandler):
         if len(self.headers.get_all("Content-Length") or []) > 1 or len(self.headers.get_all("Host") or []) > 1:
             self.send_json({"error": "duplicate header"}, 400)     # peers could read two values differently
             return True
+        cl = self.headers.get("Content-Length")
+        if cl is not None and not re.fullmatch(r"\d{1,12}", cl.strip()):
+            self.send_json({"error": "bad Content-Length"}, 400)
+            return True
         path = urlparse(self.path).path
         if method == "POST" and int(self.headers.get("Content-Length", 0) or 0) > MAX_UPLOAD:
             self.send_json({"error": "request too large"}, 413)
@@ -3796,6 +3800,9 @@ class Handler(BaseHTTPRequestHandler):
     # ── GET ────────────────────────────────────────────────────────────────────
 
     def do_GET(self):
+        self._guarded(self._get)
+
+    def _get(self):
         if self.gate("GET"):
             return
         parts = self.segs()
@@ -3972,11 +3979,18 @@ class Handler(BaseHTTPRequestHandler):
 
     # ── POST ───────────────────────────────────────────────────────────────────
 
-    def do_POST(self):
+    def _guarded(self, fn):
+        """Run a handler; malformed input becomes a clean 400 instead of a dropped connection."""
         try:
-            self._post()
+            fn()
         except BusyError:
             self.send_json({"error": "Too many running tasks, wait for one to finish"}, 429)
+        except (ValueError, TypeError, KeyError, AttributeError, OverflowError) as e:
+            print(f"[error] {self.command} {self.path.split('?')[0]!r}: {e!r}", flush=True)
+            self.send_json({"error": "invalid request"}, 400)
+
+    def do_POST(self):
+        self._guarded(self._post)
 
     def _post(self):
         if self.gate("POST"):
@@ -4451,6 +4465,9 @@ class Handler(BaseHTTPRequestHandler):
     # ── DELETE ─────────────────────────────────────────────────────────────────
 
     def do_DELETE(self):
+        self._guarded(self._delete)
+
+    def _delete(self):
         if self.gate("DELETE"):
             return
         parts = self.segs()
