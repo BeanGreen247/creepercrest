@@ -333,7 +333,19 @@ static bool lan_open(const http::Request &rq) {
     return inet_pton(AF_INET, host.c_str(), &a4) == 1 || inet_pton(AF_INET6, host.c_str(), &a6) == 1;
 }
 
-static void log_line(const char *tag, const std::string &msg) { printf("[%s] %s\n", tag, msg.c_str()); fflush(stdout); }
+// Values that came from a request (user names, paths) may contain line breaks or terminal escapes: show them
+// escaped so nobody can forge a log line.
+static std::string log_safe(const std::string &in) {
+    std::string out;
+    for (unsigned char c : in) {
+        if (c < 0x20 || c == 0x7f) { char b[8]; snprintf(b, sizeof b, "\\x%02x", c); out += b; }
+        else out += (char)c;
+        if (out.size() > 300) { out += "..."; break; }
+    }
+    return out;
+}
+
+static void log_line(const char *tag, const std::string &msg) { printf("[%s] %s\n", tag, log_safe(msg).c_str()); fflush(stdout); }
 
 static const char *DUMMY_TOTP = "JBSWY3DPEHPK3PXP";
 static const std::string &dummy_hash() {

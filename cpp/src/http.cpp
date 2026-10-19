@@ -277,7 +277,9 @@ void *conn_main(void *p) {
         try {
             (*a->ctx.h)(rq, rs);
         } catch (const std::exception &e) {
-            fprintf(stderr, "[error] %s %s: %s\n", rq.method.c_str(), rq.path.c_str(), e.what());
+            std::string shown;   // request text is shown escaped so it cannot forge log lines
+            for (unsigned char ch : rq.method + " " + rq.path) { if (ch < 0x20 || ch == 0x7f) { char b[8]; snprintf(b, sizeof b, "\\x%02x", ch); shown += b; } else shown += (char)ch; }
+            fprintf(stderr, "[error] %s: %s\n", shown.c_str(), e.what());
             rs = Response();
             rs.code = 500; rs.body = "internal error"; rs.set("Content-Type", "text/plain");
         }
