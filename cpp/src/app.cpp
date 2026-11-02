@@ -1,4 +1,7 @@
 #include "app.h"
+#include "registry.h"
+#include <thread>
+#include <unistd.h>
 #include "assets.h"
 #include "api.h"
 #include "auth.h"
@@ -342,6 +345,33 @@ static bool private_addr(const std::string &ip) {
         return !memcmp(&a6, lo, 16) || (a6.s6_addr[0] & 0xFE) == 0xFC || (a6.s6_addr[0] == 0xFE && (a6.s6_addr[1] & 0xC0) == 0x80);
     }
     return false;
+}
+
+std::vector<std::string> self_args;
+
+bool panel_power_ok(const http::Request &rq) {
+    if (!cfg.lan_mode && !cfg.auth_disabled) return false;
+    for (auto h : {"x-forwarded-for", "forwarded", "x-real-ip", "via", "cf-connecting-ip"})
+        if (!rq.hdr(h).empty()) return false;
+    return private_addr(rq.peer);
+}
+
+void panel_power(bool restart) {
+    std::thread([restart] {
+        usleep(600000);                      // let the HTTP reply reach the browser first
+        printf("%s requested from the web UI - stopping all running servers...\n", restart ? "Restart" : "Shutdown");
+        fflush(stdout);
+        registry::stop_all();
+        if (restart && !self_args.empty()) {
+            std::vector<char *> av;
+            for (auto &a : self_args) av.push_back(const_cast<char *>(a.c_str()));
+            av.push_back(nullptr);
+            execv("/proc/self/exe", av.data());   // same PID, so systemd keeps tracking it; the listen socket is close-on-exec
+            perror("restart failed");
+            _exit(1);                        // non-zero: a systemd unit with Restart=on-failure brings it back
+        }
+        _exit(0);
+    }).detach();
 }
 
 static bool lan_open(const http::Request &rq) {

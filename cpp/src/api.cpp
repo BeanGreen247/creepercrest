@@ -283,6 +283,7 @@ bool do_get(Request &rq, Response &rs, const std::vector<std::string> &p, const 
         }
         sysinfo::forget_except(live);
         v["backend"] = "cpp";
+        v["panel_power"] = app::panel_power_ok(rq);
         v["servers"] = servers;
         v["backups"] = backup::list();
         v["backup_dir"] = backup::dir();
@@ -446,6 +447,13 @@ std::string spool_to_temp(const multipart::Body &body, const multipart::Part &pa
 
 bool do_post(Request &rq, Response &rs, const std::vector<std::string> &p, const std::string &ip) {
     (void)ip;
+    if (p.size() == 3 && p[0] == "api" && p[1] == "panel" && (p[2] == "restart" || p[2] == "shutdown")) {
+        if (!app::panel_power_ok(rq)) { fail(rq, rs, "restart and shutdown are only available on a LAN or local setup (lan_mode or auth_disabled), from a private address", 403); return true; }
+        Value v = obj(); v["ok"] = true; v["msg"] = p[2] == "restart" ? "Restarting" : "Shutting down";
+        ok(rq, rs, v);
+        app::panel_power(p[2] == "restart");
+        return true;
+    }
     if (p.size() == 2 && p[0] == "api") {
         const std::string &a = p[1];
         if (a == "restore") {

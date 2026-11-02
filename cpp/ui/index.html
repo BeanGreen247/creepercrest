@@ -309,6 +309,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
   </nav>
   <a href="https://github.com/BeanGreen247/creepercrest" target="_blank" rel="noopener" style="font-size:.73rem;color:#7d8590;white-space:nowrap">by BeanGreen247</a>
   __BACKEND__
+  <span id="panel-power" style="display:none;gap:.4rem"><button class="btn bg-blue" style="font-size:.72rem;padding:.25rem .6rem" onclick="panelPower('restart')" title="Restart the panel (stops all servers first)">&#8635; Restart panel</button><button class="btn bg-danger" style="font-size:.72rem;padding:.25rem .6rem" onclick="panelPower('shutdown')" title="Shut the panel down (stops all servers first)">&#9211; Shut down</button></span>
   <div class="refresh-ctrl">
     <label for="refresh-secs">Refresh every</label>
     <input id="refresh-secs" type="number" min="5" max="300" value="__REFRESH_INTERVAL__"/>
@@ -1074,6 +1075,7 @@ async function refresh() {
   try {
     const d = await api('GET', '/api/status');
     _servers = d.servers || [];
+    document.getElementById('panel-power').style.display = d.panel_power ? 'flex' : 'none';
     optLive();
     renderServers(_servers);
     renderBackups(d.backups || []);
@@ -1259,6 +1261,26 @@ function optReset() {
   optRamUI(); optDirty();
 }
 function optClose() { optEl('opt-overlay').classList.remove('open'); _opt = null; }
+
+// ── Panel restart / shutdown (LAN or local setups only) ───────────────────────
+
+async function panelPower(kind) {
+  const restart = kind === 'restart';
+  if (!confirm((restart ? 'Restart' : 'Shut down') + ' CreeperCrest?\n\nEvery running Minecraft server is stopped first.' + (restart ? '' : '\nThe panel stays off until you start it again.'))) return;
+  const r = await api('POST', '/api/panel/' + kind);
+  if (!r.ok) { flash(r.error || 'Failed', true); return; }
+  document.body.insertAdjacentHTML('beforeend', '<div id="pp-cover" style="position:fixed;inset:0;background:rgba(1,4,9,.92);z-index:300;display:flex;align-items:center;justify-content:center;color:#e6edf3;font-size:1.1rem;text-align:center;padding:2rem"><div id="pp-msg"></div></div>');
+  const m = document.getElementById('pp-msg');
+  if (!restart) { m.textContent = 'CreeperCrest is shutting down. Start it again with systemctl start creepercrest or by running the binary.'; return; }
+  m.textContent = 'Restarting - stopping servers, this page reconnects on its own...';
+  const t0 = Date.now();
+  await new Promise(r => setTimeout(r, 3000));
+  while (Date.now() - t0 < 180000) {
+    try { const x = await fetch('/api/status', {cache: 'no-store'}); if (x.ok || x.status === 401) { location.reload(); return; } } catch (e) {}
+    await new Promise(r => setTimeout(r, 1500));
+  }
+  m.textContent = 'The panel did not come back. Check the service with systemctl status creepercrest.';
+}
 
 // ── Server actions ─────────────────────────────────────────────────────────────
 

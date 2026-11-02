@@ -437,6 +437,74 @@ def t_lan_ssrf(a):
         p.cleanup()
 
 
+def t_panel_power(a):
+    """Panel restart/shutdown is refused unless lan_mode or auth_disabled is set, and a LAN shutdown really exits."""
+    p = Panel(a).start().login()
+    try:
+        notes = []
+        st, j = p.req("GET", "/api/status")
+        if j.get("panel_power"):
+            notes.append("buttons offered without lan_mode")
+        for act in ("shutdown", "restart"):
+            st, _ = p.req("POST", "/api/panel/" + act)
+            if st != 403:
+                notes.append("%s allowed without lan_mode (%s)" % (act, st))
+        if p.proc.poll() is not None:
+            return False, "panel exited although the request was refused"
+    finally:
+        p.cleanup()
+    p = Panel(a, cfg={"lan_mode": True}).start()
+    try:
+        page = http.client.HTTPConnection(HOST, p.port)
+        page.request("GET", "/")
+        p.csrf = re.search(r"const CSRF = '([^']+)'", page.getresponse().read().decode()).group(1)
+        h = {"X-CC-CSRF": p.csrf}
+        st, j = p.req("GET", "/api/status", auth=False, headers=h)
+        if not j.get("panel_power"):
+            notes.append("buttons not offered in lan_mode")
+        st, _ = p.req("POST", "/api/panel/shutdown", auth=False, headers=dict(h, **{"X-Forwarded-For": "8.8.8.8"}))
+        if st not in (401, 403):
+            notes.append("shutdown allowed through a proxy header (%s)" % st)
+        if p.proc.poll() is not None:
+            return False, "panel exited on a proxied request"
+        st, j = p.req("POST", "/api/panel/shutdown", auth=False, headers=h)
+        if st != 200:
+            notes.append("shutdown refused in lan_mode (%s)" % st)
+        else:
+            for _ in range(60):
+                if p.proc.poll() is not None:
+                    break
+                time.sleep(0.1)
+            if p.proc.poll() != 0:
+                notes.append("panel did not exit cleanly after shutdown (%s)" % p.proc.poll())
+    finally:
+        p.cleanup()
+    p = Panel(a, cfg={"lan_mode": True}).start()
+    try:
+        page = http.client.HTTPConnection(HOST, p.port)
+        page.request("GET", "/")
+        csrf = re.search(r"const CSRF = '([^']+)'", page.getresponse().read().decode()).group(1)
+        pid = p.proc.pid
+        st, j = p.req("POST", "/api/panel/restart", auth=False, headers={"X-CC-CSRF": csrf})
+        if st != 200:
+            notes.append("restart refused in lan_mode (%s)" % st)
+        else:
+            time.sleep(1.5)
+            back = False
+            for _ in range(60):
+                try:
+                    socket.create_connection((HOST, p.port), timeout=0.3).close()
+                    back = True
+                    break
+                except OSError:
+                    time.sleep(0.2)
+            if not back or p.proc.poll() is not None:
+                notes.append("panel did not come back after restart")
+        return not notes, "; ".join(notes) or "refused by default, shutdown and restart work on a LAN, proxied requests refused"
+    finally:
+        p.cleanup()
+
+
 def t_2fa_secret(a):
     """A logged-in session alone must not be enough to read the authenticator secret."""
     p = Panel(a).start().login()

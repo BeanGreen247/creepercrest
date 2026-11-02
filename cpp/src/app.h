@@ -27,6 +27,10 @@ void send_json(const http::Request &rq, http::Response &rs, const json::Value &v
 void err_json(const http::Request &rq, http::Response &rs, const std::string &msg, int code);
 void security_headers(const http::Request &rq, http::Response &rs);
 std::string client_ip(const http::Request &rq);
+// Panel restart / shutdown buttons: only with lan_mode or auth_disabled, and only from a private or loopback address with no proxy in between.
+extern std::vector<std::string> self_args;       // argv of this process, used by restart
+bool panel_power_ok(const http::Request &rq);
+void panel_power(bool restart);                  // stops every managed server, then re-execs (restart) or exits (shutdown)
 std::string expand_home(const std::string &p);
 std::string default_jvm_args();
 

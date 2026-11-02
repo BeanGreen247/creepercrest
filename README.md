@@ -31,6 +31,10 @@ Skip the firewall steps with `CC_SKIP_FIREWALL=1 sudo -E bash deploy.sh`. Open `
 
 Build and run by hand with `make -C cpp && cpp/creepercrest`. It keeps `config.json` and `users.json` next to the binary (or in the folder named by `CREEPERCREST_DIR`). Run it as the user that owns the server files.
 
+### Restart and shut down the panel from the web page
+
+For testing, local sessions and LAN-only setups, the page header shows **Restart panel** and **Shut down** buttons. They appear only when `lan_mode` or `auth_disabled` is set in `config.json`, and only for requests from a loopback or private address with no proxy header; everywhere else the API answers 403. Both stop every running Minecraft server first. Restart re-launches the same binary in place (the systemd service keeps running); shutdown exits cleanly, so the service stays stopped until you run `sudo systemctl start creepercrest`.
+
 ### Build options
 
 Pass them to `make` as `NAME=y` or `NAME=n`. Leave one out and the default applies. Changing an option rebuilds everything.

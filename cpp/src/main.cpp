@@ -22,6 +22,7 @@ static std::string base_dir() {
 }
 
 int main(int argc, char **argv) {
+    for (int i = 0; i < argc; i++) app::self_args.push_back(argv[i]);
     const char *env = getenv("CREEPERCREST_DIR");
     std::string base = env && *env ? env : base_dir();
     auth::users_file = base + "/users.json";
