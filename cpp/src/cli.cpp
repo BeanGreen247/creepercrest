@@ -2,6 +2,7 @@
 #include "cli.h"
 #include "app.h"
 #include "auth.h"
+#include "control.h"
 #include "fsu.h"
 #include "proc.h"
 #include "util.h"
@@ -50,11 +51,12 @@ bool is_cli_command(const std::string &c) {
     static const char *names[] = {"adduser", "passwd", "reset-2fa", "deluser", "users", "--remove-user",
                                   "remove-user", "removeuser", "rmuser", "lan-mode", "config-get", "config-set", "server-ports"};
     for (auto n : names) if (c == n) return true;
-    return false;
+    return control::is_command(c);
 }
 
 int cli(int argc, char **argv) {
     std::string cmd = argv[0];
+    if (control::is_command(cmd)) return control::client(argc, argv);
     if (cmd == "--remove-user" || cmd == "remove-user" || cmd == "removeuser" || cmd == "rmuser") cmd = "deluser";
     if (cmd == "config-get") {   // prints one top-level scalar from config.json (used by deploy.sh)
         if (argc < 2) return 2;

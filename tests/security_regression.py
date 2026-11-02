@@ -505,6 +505,60 @@ def t_panel_power(a):
         p.cleanup()
 
 
+def t_cli(a):
+    """The terminal control commands work through a 0600 socket, and say so plainly when the panel is down."""
+    p = Panel(a).start().login()
+    try:
+        notes = []
+        d = p.add_fake()
+        sock = os.path.join(p.dir, "control.sock")
+        if not os.path.exists(sock) or stat.S_IMODE(os.stat(sock).st_mode) != 0o600:
+            notes.append("control socket missing or not 0600")
+
+        def run(*args, timeout=60):
+            r = subprocess.run(p.cmd + list(args), env=p.env, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+            return r.returncode, r.stdout + r.stderr
+        rc, out = run("-l")
+        if rc != 0 or "fake" not in out or "stopped" not in out:
+            notes.append("list: %s %r" % (rc, out))
+        rc, out = run("-s", "1")
+        if rc != 0:
+            notes.append("start: %s %r" % (rc, out))
+        time.sleep(1.0)
+        rc, out = run("list")
+        if "running" not in out:
+            notes.append("server not running after start: %r" % out)
+        rc, out = run("send", "1", "echo", "hello-from-cli")
+        time.sleep(0.5)
+        rc, out = run("console", "1", "20")
+        if "hello-from-cli" not in out:
+            notes.append("console did not show the sent command: %r" % out)
+        rc, out = run("-r", "fake")
+        if rc != 0:
+            notes.append("restart: %s %r" % (rc, out))
+        rc, out = run("-t", "9")
+        if rc == 0:
+            notes.append("a server number out of range was accepted")
+        rc, out = run("-t")          # one server and no tty: it is picked automatically
+        if rc != 0:
+            notes.append("stop with no number: %s %r" % (rc, out))
+        rc, out = run("panel-shutdown")
+        if rc != 0:
+            notes.append("panel-shutdown: %s %r" % (rc, out))
+        for _ in range(100):
+            if p.proc.poll() is not None:
+                break
+            time.sleep(0.1)
+        if p.proc.poll() != 0:
+            notes.append("panel did not exit after panel-shutdown (%s)" % p.proc.poll())
+        rc, out = run("-l")
+        if rc == 0 or "not running" not in out:
+            notes.append("down panel not reported: %s %r" % (rc, out))
+        return not notes, "; ".join(notes) or "list, start, send, console, restart, stop and panel-shutdown work over the socket"
+    finally:
+        p.cleanup()
+
+
 def t_2fa_secret(a):
     """A logged-in session alone must not be enough to read the authenticator secret."""
     p = Panel(a).start().login()

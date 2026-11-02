@@ -63,6 +63,24 @@ Plain `make` is enough on every architecture that has g++ (x86-64, ARM and RISC-
 Update the C++ version with `sudo bash cpp/deploy.sh`; it keeps your settings.
 
 
+## Control it from a terminal (SSH or a local console)
+
+When the web page is unreachable, or the machine is just a monitor and a keyboard, the same binary controls a running panel. The panel listens on a unix socket, `control.sock`, next to `config.json`, with mode 0600, so only the user that runs the panel can use it. Run these as that user (for the service: `sudo -u crafty creepercrest ...`), and set `CREEPERCREST_DIR` if the panel keeps its files elsewhere.
+
+| Command | Short | What it does |
+|---|---|---|
+| `creepercrest list` | `-l` | numbered list of servers and whether they run |
+| `creepercrest start [N\|id]` | `-s` | start a server |
+| `creepercrest stop [N\|id]` | `-t` | stop a server |
+| `creepercrest restart [N\|id]` | `-r` | restart a server |
+| `creepercrest console [N\|id] [lines]` | `-c` | show the last console lines (default 30) |
+| `creepercrest send [N\|id] <command>` | | run a console command, e.g. `send 1 say hello` |
+| `creepercrest panel-start` | | start the panel: through systemd if the unit exists, otherwise in the terminal |
+| `creepercrest panel-restart` | `reboot` | stop all servers and restart the panel (starts it if it was not running) |
+| `creepercrest panel-shutdown` | `shutdown` | stop all servers and shut the panel down |
+
+Leave the number out and you pick from the list (a single server is picked for you; with no terminal attached you must give a number). `creepercrest help` prints this list. These commands are not gated by `lan_mode`: access to the socket is the permission.
+
 ## Ports
 
 | Port | Purpose |

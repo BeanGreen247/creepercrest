@@ -2,6 +2,7 @@
 #include "app.h"
 #include "backup.h"
 #include "cli.h"
+#include "control.h"
 #include "registry.h"
 #include <csignal>
 #include <cstdio>
@@ -27,7 +28,10 @@ int main(int argc, char **argv) {
     std::string base = env && *env ? env : base_dir();
     auth::users_file = base + "/users.json";
     if (!app::load_config(base)) return 1;
-    if (argc > 1 && is_cli_command(argv[1])) return cli(argc - 1, argv + 1);
+    if (argc > 1 && is_cli_command(argv[1])) {
+        int rc = cli(argc - 1, argv + 1);
+        if (rc != control::RUN_PANEL) return rc;   // panel-start with no service: fall through and run the panel here
+    }
     registry::load();
     http::Options opt;
     opt.spool_dir = base;
@@ -71,6 +75,7 @@ int main(int argc, char **argv) {
     if (ls < 0) { fprintf(stderr, "%s\n", err.c_str()); return 1; }
     printf("CreeperCrest  ->  %s://%s:%d\nPress Ctrl+C to stop.\n", opt.tls_cert.empty() ? "http" : "https", opt.host.c_str(), opt.port);
     fflush(stdout);
+    control::start(app::cfg.base_dir);
     backup::start_scheduler();
     for (auto &s : registry::all()) {
         if (s->cfg().flag("autostart")) {
