@@ -122,7 +122,8 @@ section+section{margin-top:2.2rem}
   border:1px dashed #30363d;border-radius:12px;background:rgba(255,255,255,.015)}
 
 /* ── Options modal (exaroton-style) ── */
-.opt-modal{width:min(980px,96vw);max-height:94vh;overflow-y:auto;padding:1.1rem}
+.modal.opt-modal{width:min(1100px,96vw);max-height:92vh;padding:0;display:flex;flex-direction:column;overflow:hidden;position:relative}
+.opt-body{overflow-y:auto;padding:1.2rem 1.4rem;flex:1;min-height:0}
 .opt-head{display:flex;align-items:center;gap:.7rem;margin-bottom:.8rem;flex-wrap:wrap}
 .opt-head h3{margin:0;font-size:1.05rem}
 .opt-sw{font-size:.7rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:.15rem .5rem;border-radius:999px;background:#1f6feb33;color:#58a6ff;border:1px solid #1f6feb66}
@@ -137,13 +138,13 @@ section+section{margin-top:2.2rem}
 .opt-range::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;background:#e6edf3;border:3px solid #238636;box-shadow:0 0 6px rgba(63,185,80,.5)}
 .opt-range::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:#e6edf3;border:3px solid #238636}
 .opt-ticks{display:flex;justify-content:space-between;font-size:.68rem;color:#484f58}
-.opt-live{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:.8rem;margin-top:.9rem;text-align:left}
+.opt-live{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.8rem;margin-top:.9rem;text-align:left}
 .opt-meter{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:.5rem .7rem}
 .opt-meter b{display:block;font-size:.72rem;color:#7d8590;font-weight:600;margin-bottom:.3rem}
 .opt-meter .usage-bar{margin-bottom:.25rem}
 .opt-meter span{font-size:.78rem;color:#c9d1d9}
 .opt-title{font-size:.95rem;font-weight:700;margin:0 0 .6rem;color:#e6edf3}
-.opt-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:.5rem}
+.opt-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:.6rem}
 .opt-row{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:.5rem .65rem}
 .opt-row.wide{grid-column:1/-1}
 .opt-line{display:flex;align-items:center;justify-content:space-between;gap:.6rem;min-height:30px}
@@ -165,7 +166,15 @@ section+section{margin-top:2.2rem}
 .opt-note{font-size:.7rem;color:#7d8590;margin-top:.15rem}
 .opt-banner{display:none;align-items:center;justify-content:space-between;gap:.8rem;flex-wrap:wrap;background:#9e6a0322;border:1px solid #9e6a03;color:#e3b341;border-radius:8px;padding:.6rem .8rem;margin-bottom:.8rem;font-size:.85rem}
 .opt-banner.show{display:flex}
-.opt-foot{display:flex;justify-content:space-between;align-items:center;gap:.6rem;flex-wrap:wrap;position:sticky;bottom:-1.1rem;background:#161b22;padding:.7rem 0 .2rem}
+.opt-foot{display:flex;justify-content:space-between;align-items:center;gap:.6rem;flex-wrap:wrap;background:#161b22;padding:.8rem 1.4rem;border-top:1px solid #30363d;flex:none}
+.opt-line label{min-width:0;overflow-wrap:anywhere}
+.opt-row select{max-width:60%}
+.opt-warn{display:none;position:absolute;inset:0;background:rgba(1,4,9,.8);align-items:center;justify-content:center;z-index:5;padding:1rem}
+.opt-warn.show{display:flex}
+.opt-warn>div{background:#161b22;border:1px solid #9e6a03;border-radius:12px;padding:1.4rem;max-width:480px;width:100%}
+.opt-warn h4{margin:0 0 .5rem;color:#e3b341;font-size:1rem}
+.opt-warn p{margin:0 0 1rem;font-size:.85rem;color:#c9d1d9;line-height:1.5}
+.opt-warn .row{display:flex;gap:.5rem;flex-wrap:wrap;justify-content:flex-end}
 .opt-dirty{font-size:.78rem;color:#7d8590}
 .opt-dirty.on{color:#e3b341}
 
@@ -428,6 +437,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
 <!-- Options (sliders / apply / restart notice) -->
 <div class="overlay" id="opt-overlay">
   <div class="modal opt-modal">
+   <div class="opt-body">
     <div class="opt-head"><h3 id="opt-title">Options</h3><span class="opt-sw" id="opt-sw"></span><span class="badge off" id="opt-state"></span></div>
     <div class="opt-banner" id="opt-banner"><span id="opt-banner-msg"></span><button class="btn bg-blue" id="opt-restart" onclick="optRestart()">&#8635; Restart now</button></div>
     <div class="opt-box opt-ram">
@@ -450,14 +460,25 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
       <div class="opt-title">server.properties</div>
       <div class="opt-grid" id="opt-grid"></div>
     </div>
+   </div>
     <div class="opt-foot">
       <span class="opt-dirty" id="opt-dirty">No changes</span>
       <span style="display:flex;gap:.5rem">
         <button class="btn bg-gray" onclick="optClose()">Close</button>
-        <button class="btn bg-gray" onclick="optReset()">Reset</button>
+        <button class="btn bg-gray" onclick="optReset()" title="Put every value back the way it was when you opened this page or last applied">Restore previous</button>
         <button class="btn bg-green" id="opt-apply" onclick="optApply()" disabled>Apply</button>
       </span>
     </div>
+    <div class="opt-warn" id="opt-warn"><div>
+      <h4>You have unsaved changes</h4>
+      <p>These options have not been applied yet. Leaving now throws the changes away. You can also put everything back to the previous values and keep editing.</p>
+      <div class="row">
+        <button class="btn bg-gray" onclick="optWarn(false)">Keep editing</button>
+        <button class="btn bg-gray" onclick="optReset();optWarn(false)">Restore previous</button>
+        <button class="btn bg-danger" onclick="optLeave()">Discard and close</button>
+        <button class="btn bg-green" onclick="optApplyClose()">Apply and close</button>
+      </div>
+    </div></div>
   </div>
 </div>
 
@@ -1262,7 +1283,14 @@ function optReset() {
   optBuild(props, o.allow_offline);
   optRamUI(); optDirty();
 }
-function optClose() { optEl('opt-overlay').classList.remove('open'); _opt = null; }
+function optIsDirty() { return !!_opt && JSON.stringify(optCollect()) !== _opt.snap; }
+function optWarn(on) { optEl('opt-warn').classList.toggle('show', on); }
+function optLeave() { optWarn(false); optEl('opt-overlay').classList.remove('open'); _opt = null; }
+function optClose() { if (optIsDirty()) optWarn(true); else optLeave(); }   // asks first when something is unsaved
+async function optApplyClose() { await optApply(); if (!optIsDirty()) optLeave(); else optWarn(false); }
+document.getElementById('opt-overlay').addEventListener('mousedown', e => { if (e.target.id === 'opt-overlay') optClose(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && _opt && optEl('opt-overlay').classList.contains('open')) { if (optEl('opt-warn').classList.contains('show')) optWarn(false); else optClose(); } });
+window.addEventListener('beforeunload', e => { if (optIsDirty()) { e.preventDefault(); e.returnValue = ''; } });
 
 // ── Panel restart / shutdown (LAN or local setups only) ───────────────────────
 
