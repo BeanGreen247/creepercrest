@@ -27,10 +27,11 @@ fi
 
 TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
 TARGET_DIR="$TARGET_HOME/creepercrest"
+APP_DIR="$TARGET_DIR/cpp"      # the binary, config.json, users.json and tls/ live here; the service runs $APP_DIR/creepercrest
 
 echo ""
 echo "  User    : $TARGET_USER"
-echo "  Install : $TARGET_DIR"
+echo "  Install : $APP_DIR"
 echo "  Backups : $TARGET_HOME/mc-backups"
 echo ""
 read -rp "Continue? [Y/n]: " CONFIRM
@@ -76,7 +77,7 @@ pick_jdk() {
 if [ -z "$PKG" ]; then
     echo "  Unsupported package manager - make sure g++, make, the openssl command, OpenSSL and libzip (dev packages), OpenJDK and ufw are installed."
 else
-    if [ ! -x "$SCRIPT_DIR/creepercrest" ]; then
+    if true; then
         echo "  Installing build tools (g++, make, OpenSSL and libzip headers)..."
         case "$PKG" in
             apt) pkg_install g++ make libssl-dev libzip-dev zlib1g-dev ;;
@@ -109,18 +110,50 @@ else
     fi
 fi
 
-if [ ! -x "$SCRIPT_DIR/creepercrest" ]; then
-    echo ""
-    echo "Building creepercrest..."
-    make -C "$SCRIPT_DIR" -j"$(nproc)"
-fi
+# ── Build options (every compile-time flag) ───────────────────────────────────
+# Preset any of them from the environment to skip its question, e.g.  CC_PANEL_POWER=y sudo -E bash deploy.sh
+echo ""
+echo "Build options (each one is a compile-time flag)"
+ask_flag() {   # name, default (y/n), description -> prints y or n
+    local name="$1" def="$2" desc="$3" preset="CC_$1" ans
+    ans="${!preset:-}"
+    if [ -z "$ans" ]; then
+        read -rp "  $name - $desc [$([ "$def" = y ] && echo Y/n || echo y/N)]: " ans
+    fi
+    case "${ans:-$def}" in [yY]*|1|true|on) echo y ;; *) echo n ;; esac
+}
+MAKE_OPTS=""
+for spec in \
+    "O2|n|use -O2 instead of -O3" \
+    "DISABLE_2FA|n|password-only login, no authenticator code" \
+    "DISABLE_BACKUPS|n|compile the backup feature out" \
+    "PANEL_POWER|n|always show the panel Restart / Shut down buttons (default: only on LAN/local setups)" \
+    "DEBUG|n|debug build: -Og -g and request logging"; do
+    IFS='|' read -r f_name f_def f_desc <<< "$spec"
+    v=$(ask_flag "$f_name" "$f_def" "$f_desc")
+    MAKE_OPTS="$MAKE_OPTS $f_name=$v"
+done
+echo "  make options:$MAKE_OPTS"
+
+echo ""
+echo "Building creepercrest..."
+# shellcheck disable=SC2086
+make -C "$SCRIPT_DIR" -j"$(nproc)" $MAKE_OPTS
 [ -x "$SCRIPT_DIR/creepercrest" ] || { echo "Error: $SCRIPT_DIR/creepercrest was not built."; exit 1; }
 
 # ── Copy files ─────────────────────────────────────────────────────────────────
 echo ""
 echo "Copying files..."
 
-sudo mkdir -p "$TARGET_DIR"
+sudo mkdir -p "$APP_DIR"
+
+# Older installs kept the binary and its data directly in $TARGET_DIR: carry the data over.
+for f in config.json users.json tls; do
+    if [ -e "$TARGET_DIR/$f" ] && [ ! -e "$APP_DIR/$f" ]; then
+        sudo mv "$TARGET_DIR/$f" "$APP_DIR/$f"
+        echo "  $f  → moved into $APP_DIR"
+    fi
+done
 
 copy_if_different() {
     local src="$1" dst="$2" label="$3"
@@ -133,15 +166,15 @@ copy_if_different() {
 }
 
 sudo systemctl stop creepercrest 2>/dev/null || true   # the running binary cannot be overwritten in place
-copy_if_different "$SCRIPT_DIR/creepercrest" "$TARGET_DIR/creepercrest" "creepercrest"
-sudo chmod 755 "$TARGET_DIR/creepercrest"
+copy_if_different "$SCRIPT_DIR/creepercrest" "$APP_DIR/creepercrest" "creepercrest"
+sudo chmod 755 "$APP_DIR/creepercrest"
 copy_if_different "$SCRIPT_DIR/../README.md" "$TARGET_DIR/README.md" "README.md"
 
 # The web UI and editor are embedded in the binary: nothing else to copy.
 
 # Only copy config if one doesn't already exist - preserve existing settings
-if [ ! -f "$TARGET_DIR/config.json" ]; then
-    copy_if_different "$SCRIPT_DIR/config.json" "$TARGET_DIR/config.json" "config.json"
+if [ ! -f "$APP_DIR/config.json" ]; then
+    copy_if_different "$SCRIPT_DIR/config.json" "$APP_DIR/config.json" "config.json"
     echo "  config.json  → created"
 else
     echo "  config.json  → kept existing (not overwritten)"
@@ -158,20 +191,20 @@ echo "  clients on 192.168.x / 10.x / 172.16-31.x / localhost get in directly, e
 echo "  Never port-forward the panel to the internet while this is on."
 read -rp "Enable LAN mode (no login on the local network)? [y/N]: " LAN_CHOICE
 case "${LAN_CHOICE:-n}" in
-    [yY]*) sudo -u "$TARGET_USER" "$TARGET_DIR/creepercrest" lan-mode on ;;
-    *)     sudo -u "$TARGET_USER" "$TARGET_DIR/creepercrest" lan-mode off >/dev/null ;;
+    [yY]*) sudo -u "$TARGET_USER" "$APP_DIR/creepercrest" lan-mode on ;;
+    *)     sudo -u "$TARGET_USER" "$APP_DIR/creepercrest" lan-mode off >/dev/null ;;
 esac
 
 # ── Login users (password + 2FA) ───────────────────────────────────────────────
 echo ""
 echo "Login users"
 echo "  The panel requires a login with an authenticator-app code. Until a user exists it stays locked."
-if [ -s "$TARGET_DIR/users.json" ]; then
-    echo "  Existing users: $(sudo -u "$TARGET_USER" "$TARGET_DIR/creepercrest" users | tr '\n' ' ')"
+if [ -s "$APP_DIR/users.json" ]; then
+    echo "  Existing users: $(sudo -u "$TARGET_USER" "$APP_DIR/creepercrest" users | tr '\n' ' ')"
 fi
 read -rp "Usernames to create now (space separated, blank to skip): " NEW_USERS
 for u in $NEW_USERS; do
-    sudo -u "$TARGET_USER" "$TARGET_DIR/creepercrest" adduser "$u" || true
+    sudo -u "$TARGET_USER" "$APP_DIR/creepercrest" adduser "$u" || true
 done
 
 # ── HTTPS ────────────────────────────────────────────────────
@@ -187,7 +220,7 @@ else
 fi
 case "${TLS_CHOICE:-y}" in
     [yY]*)
-        TLS_DIR="$TARGET_DIR/tls"
+        TLS_DIR="$APP_DIR/tls"
         HOSTN=$(hostname)
         SAN="DNS:$HOSTN,DNS:localhost,IP:127.0.0.1"
         for ip in $(hostname -I 2>/dev/null); do SAN="$SAN,IP:$ip"; done
@@ -196,8 +229,8 @@ case "${TLS_CHOICE:-y}" in
         if sudo -u "$TARGET_USER" openssl req -x509 -newkey rsa:3072 -nodes -days 825 -keyout "$TLS_DIR/key.pem" \
                -out "$TLS_DIR/cert.pem" -subj "/CN=$HOSTN" -addext "subjectAltName=$SAN" 2>/dev/null; then
             sudo chmod 600 "$TLS_DIR/key.pem"
-            sudo -u "$TARGET_USER" "$TARGET_DIR/creepercrest" config-set tls_cert "$TLS_DIR/cert.pem"
-            sudo -u "$TARGET_USER" "$TARGET_DIR/creepercrest" config-set tls_key "$TLS_DIR/key.pem"
+            sudo -u "$TARGET_USER" "$APP_DIR/creepercrest" config-set tls_cert "$TLS_DIR/cert.pem"
+            sudo -u "$TARGET_USER" "$APP_DIR/creepercrest" config-set tls_key "$TLS_DIR/key.pem"
             echo "  HTTPS enabled (certificate valid for 825 days, in $TLS_DIR)"
         else
             echo "  Could not create the certificate; staying on plain HTTP."
@@ -211,7 +244,7 @@ if [ "$SKIP_FW" = 1 ]; then
     echo ""
     echo "Firewall: skipped (CC_SKIP_FIREWALL) - open the panel port and Minecraft ports yourself."
 elif [ -x "$UFW" ]; then
-    CONF_PORT=$(sudo -u "$TARGET_USER" "$TARGET_DIR/creepercrest" config-get port 2>/dev/null || echo 8888)
+    CONF_PORT=$(sudo -u "$TARGET_USER" "$APP_DIR/creepercrest" config-get port 2>/dev/null || echo 8888)
     PANEL_PORT="${CONF_PORT:-8888}"
     # the network of the interface that carries the default route (not a link-local 169.254.x.x route)
     LAN_DEV=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
@@ -251,7 +284,7 @@ elif [ -x "$UFW" ]; then
     fi
 
     # Also open any custom server-port already used by configured servers
-    EXTRA_PORTS=$(sudo -u "$TARGET_USER" "$TARGET_DIR/creepercrest" server-ports 2>/dev/null || true)
+    EXTRA_PORTS=$(sudo -u "$TARGET_USER" "$APP_DIR/creepercrest" server-ports 2>/dev/null || true)
     for p in $EXTRA_PORTS; do
         sudo "$UFW" allow "$p/tcp" >/dev/null && echo "  allow $p/tcp (existing server)"
     done
@@ -274,8 +307,8 @@ After=network.target
 
 [Service]
 User=$TARGET_USER
-WorkingDirectory=$TARGET_DIR
-ExecStart=$TARGET_DIR/creepercrest
+WorkingDirectory=$APP_DIR
+ExecStart=$APP_DIR/creepercrest
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
@@ -312,7 +345,7 @@ else
 fi
 
 # ── Done ───────────────────────────────────────────────────────────────────────
-PORT=$(sudo -u "$TARGET_USER" "$TARGET_DIR/creepercrest" config-get port 2>/dev/null || echo 8888)
+PORT=$(sudo -u "$TARGET_USER" "$APP_DIR/creepercrest" config-get port 2>/dev/null || echo 8888)
 
 # Best-effort local IP
 IP=$(hostname -I 2>/dev/null | awk '{print $1}')
@@ -323,7 +356,7 @@ echo "────────────────────────�
 echo "  CreeperCrest deployed successfully"
 echo "  Running as : $TARGET_USER"
 SCHEME=http
-[ -n "$(sudo -u "$TARGET_USER" "$TARGET_DIR/creepercrest" config-get tls_cert 2>/dev/null)" ] && SCHEME=https
+[ -n "$(sudo -u "$TARGET_USER" "$APP_DIR/creepercrest" config-get tls_cert 2>/dev/null)" ] && SCHEME=https
 echo "  UI         : ${SCHEME}://${IP}:${PORT}"
 echo "────────────────────────────────────"
 echo ""

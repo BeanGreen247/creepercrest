@@ -4,8 +4,8 @@ After=network.target
 
 [Service]
 User=crafty
-WorkingDirectory=/home/crafty/creepercrest
-ExecStart=/home/crafty/creepercrest/creepercrest
+WorkingDirectory=/home/crafty/creepercrest/cpp
+ExecStart=/home/crafty/creepercrest/cpp/creepercrest
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
