@@ -3,6 +3,7 @@
 #   make DISABLE_2FA=y      password-only login, no authenticator code (default: n)
 #   make DISABLE_BACKUPS=y  compile the backup feature out (default: n)
 #   make DEBUG=y            debug build: -Og -g, request logging, no -DNDEBUG (default: n)
+#   make release            also copy the binary into build/release-<architecture>/
 # Example: make O2=y DISABLE_BACKUPS=y DEBUG=n
 yes = $(filter y yes 1 true on,$(call lc,$(strip $(1))))
 lc  = $(shell printf '%s' '$(1)' | tr 'A-Z' 'a-z')
@@ -32,7 +33,7 @@ OBJ       = $(SRC:src/%.cpp=build/%.o)
 
 # Rebuild everything when the flags change (a stamp records the last flags used).
 STAMP = build/.flags
-$(shell mkdir -p build; echo '$(CXXFLAGS)' | cmp -s - $(STAMP) || echo '$(CXXFLAGS)' > $(STAMP))
+$(shell mkdir -p build; echo '$(CXX) $(CXXFLAGS)' | cmp -s - $(STAMP) || echo '$(CXX) $(CXXFLAGS)' > $(STAMP))
 
 creepercrest: $(OBJ)
 	$(CXX) $(LDFLAGS) -o $@ $(OBJ) $(LIBS)
@@ -49,6 +50,19 @@ build/%.o: src/%.cpp $(wildcard src/*.h) $(STAMP)
 	@mkdir -p build
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+# make release  ->  build/release-<architecture>/ with the binary and a checksum.
+# The architecture is `uname -m` of the machine building it; name it yourself for a cross build:
+#   make release CXX=aarch64-linux-gnu-g++ ARCH=aarch64
+ARCH   ?= $(shell uname -m)
+RELDIR  = build/release-$(ARCH)
+
+release: creepercrest
+	@mkdir -p $(RELDIR)
+	cp creepercrest $(RELDIR)/creepercrest
+	cp creepercrest.service $(RELDIR)/creepercrest.service
+	cd $(RELDIR) && sha256sum creepercrest > SHA256SUMS
+	@echo "Release files are in cpp/$(RELDIR)/"
+
 clean:
 	rm -rf build creepercrest
-.PHONY: clean
+.PHONY: clean release

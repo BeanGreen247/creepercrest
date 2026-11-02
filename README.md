@@ -50,6 +50,10 @@ Pass them to `make` as `NAME=y` or `NAME=n`. Leave one out and the default appli
 make -C cpp O2=y DISABLE_BACKUPS=y
 ```
 
+### Release folder
+
+`make -C cpp release` builds the binary and copies it, with the systemd unit template and a `SHA256SUMS` file, into `cpp/build/release-<architecture>/` (for example `cpp/build/release-x86_64/`), ready to attach to a release or copy to another machine. Build options apply, so `make -C cpp release O2=y` works. For a cross build, name the folder yourself: `make -C cpp release CXX=aarch64-linux-gnu-g++ ARCH=aarch64` (the OpenSSL and libzip libraries for that architecture must be installed).
+
 `deploy.sh` only builds when the binary is missing, so build with your options first, or run `CC_SKIP_FIREWALL=1 sudo -E env O2=y bash cpp/deploy.sh` on a fresh checkout. Run `make -C cpp clean` before switching options on an already built tree if you want a guaranteed clean build.
 
 Update the C++ version with `sudo bash cpp/deploy.sh`; it keeps your settings.
