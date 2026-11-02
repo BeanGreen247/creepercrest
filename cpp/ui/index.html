@@ -595,6 +595,15 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
   </div>
 </div>
 
+<!-- Busy / progress overlay -->
+<div class="overlay" id="busy-overlay" style="z-index:400">
+  <div class="modal" style="width:min(360px,90vw);text-align:center;padding:2rem 1.6rem">
+    <p id="busy-label" style="color:#c9d1d9;font-size:.87rem">Working...</p>
+    <div class="fb-prog-track" style="margin-top:1rem"><div class="fb-prog-fill indet" id="busy-fill"></div></div>
+    <p id="busy-val" style="margin-top:.5rem;color:#7d8590;font-size:.76rem;min-height:1em"></p>
+  </div>
+</div>
+
 <!--BAK--><!-- Restore backup overlay -->
 <div class="overlay" id="restore-overlay">
   <div class="modal">
@@ -630,15 +639,6 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
       <button class="btn bg-gray" onclick="closeCreateFromBackup()">Cancel</button>
       <button class="btn bg-green" onclick="submitCreateFromBackup()">Create Server</button>
     </div>
-  </div>
-</div>
-
-<!-- Busy / progress overlay -->
-<div class="overlay" id="busy-overlay" style="z-index:400">
-  <div class="modal" style="width:min(360px,90vw);text-align:center;padding:2rem 1.6rem">
-    <p id="busy-label" style="color:#c9d1d9;font-size:.87rem">Working...</p>
-    <div class="fb-prog-track" style="margin-top:1rem"><div class="fb-prog-fill indet" id="busy-fill"></div></div>
-    <p id="busy-val" style="margin-top:.5rem;color:#7d8590;font-size:.76rem;min-height:1em"></p>
   </div>
 </div>
 

@@ -573,6 +573,9 @@ def t_backup_ui(a):
             bad = [k for k, v in has.items() if v]
             if "const NOBAK = true;" not in html:
                 bad.append("NOBAK flag")
+            for need in ("busy-overlay", "busy-label", "busy-fill", "busy-val", "wz-overlay", "wz-create", "fb-overlay", "dp-overlay", "flash"):
+                if 'id="%s"' % need not in html:
+                    bad.append("shared element %s was stripped with the backup UI" % need)
             return not bad, ("backup UI still served: %s" % bad) if bad else "no-backups build: tab, page and dialogs are gone"
         missing = [k for k in ("tab", "page", "restore") if not has[k]]
         if has["marker"] or "const NOBAK = false;" not in html:
