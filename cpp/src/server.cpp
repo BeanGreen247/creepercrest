@@ -117,10 +117,10 @@ bool set_properties(const std::string &dir0, const std::vector<std::pair<std::st
     return fsu::write_file(path, out);
 }
 
-void harden(const std::string &dir0, bool allow_offline) {
+void harden(const std::string &dir0, bool allow_offline, bool whitelist) {
     std::string dir = fsu::expand_home(dir0);
     std::vector<std::pair<std::string, std::string>> forced = {
-        {"white-list", "true"}, {"enforce-whitelist", "true"}, {"online-mode", "true"},
+        {"white-list", whitelist ? "true" : "false"}, {"enforce-whitelist", whitelist ? "true" : "false"}, {"online-mode", "true"},
         {"enable-query", "false"}, {"enable-rcon", "false"}};
     if (allow_offline) forced.erase(std::find_if(forced.begin(), forced.end(), [](auto &p) { return p.first == "online-mode"; }));
     if (!set_properties(dir, forced)) throw std::runtime_error("cannot write server.properties");
@@ -362,7 +362,7 @@ std::pair<bool, std::string> ManagedServer::start() {
         cmd.push_back("--nogui");
     }
     try {
-        srvutil::harden(dir, c.flag("allow_offline"));
+        srvutil::harden(dir, c.flag("allow_offline"), !c.find("whitelist") || c.flag("whitelist"));
     } catch (const std::exception &e) {
         return {false, std::string("failed to harden server config: ") + e.what()};
     }

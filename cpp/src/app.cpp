@@ -362,6 +362,10 @@ static bool private_addr(const std::string &ip) {
 std::vector<std::string> self_args;
 
 bool panel_power_ok(const http::Request &rq) {
+#ifdef CC_PANEL_POWER
+    (void)rq;
+    return true;      // built with PANEL_POWER=y: always offered to logged-in users
+#endif
     if (!cfg.lan_mode && !cfg.auth_disabled) return false;
     for (auto h : {"x-forwarded-for", "forwarded", "x-real-ip", "via", "cf-connecting-ip"})
         if (!rq.hdr(h).empty()) return false;

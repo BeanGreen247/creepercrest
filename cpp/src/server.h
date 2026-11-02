@@ -58,7 +58,7 @@ private:
 namespace srvutil {
 // server.properties helpers
 bool set_properties(const std::string &dir, const std::vector<std::pair<std::string, std::string>> &updates);
-void harden(const std::string &dir, bool allow_offline);        // throws std::runtime_error on properties failure
+void harden(const std::string &dir, bool allow_offline, bool whitelist = true);        // throws std::runtime_error on properties failure
 std::string prop_escape(const std::string &v);
 // Current server.properties as key -> raw value (empty map if the file is missing).
 std::vector<std::pair<std::string, std::string>> read_properties(const std::string &dir);

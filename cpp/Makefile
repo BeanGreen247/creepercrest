@@ -1,6 +1,7 @@
 # Build options (y/n; anything else, or leaving them out, means the default):
 #   make O2=y               use -O2 instead of the default -O3
 #   make DISABLE_2FA=y      password-only login, no authenticator code (default: n)
+#   make PANEL_POWER=y       always show the panel Restart / Shut down buttons (default: only on LAN/local setups)
 #   make DISABLE_BACKUPS=y  compile the backup feature out (default: n)
 #   make DEBUG=y            debug build: -Og -g, request logging, no -DNDEBUG (default: n)
 #   make cmake              run cmake, then make, with the same options
@@ -19,6 +20,9 @@ DEFS += -DCC_DISABLE_2FA
 endif
 ifneq ($(call yes,$(DISABLE_BACKUPS)),)
 DEFS += -DCC_DISABLE_BACKUPS
+endif
+ifneq ($(call yes,$(PANEL_POWER)),)
+DEFS += -DCC_PANEL_POWER
 endif
 ifneq ($(call yes,$(DEBUG)),)
 OPT  := -Og -g
@@ -54,7 +58,7 @@ build/%.o: src/%.cpp $(wildcard src/*.h) $(STAMP)
 # make cmake  ->  run cmake, then make, with the same options (for toolchains or architectures that want CMake):
 #   make cmake O2=y DISABLE_BACKUPS=y
 # The binary still ends up at cpp/creepercrest.
-CMAKE_OPTS = $(foreach o,O2 DISABLE_2FA DISABLE_BACKUPS DEBUG,-D$(o)=$(if $(call yes,$($(o))),ON,OFF))
+CMAKE_OPTS = $(foreach o,O2 DISABLE_2FA DISABLE_BACKUPS PANEL_POWER DEBUG,-D$(o)=$(if $(call yes,$($(o))),ON,OFF))
 
 cmake:
 	cmake -G "Unix Makefiles" -S . -B build/cmake $(CMAKE_OPTS)

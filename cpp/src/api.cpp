@@ -360,6 +360,7 @@ bool do_get(Request &rq, Response &rs, const std::vector<std::string> &p, const 
                 for (size_t i = 0; i < kv.second.size(); i++) if (kv.second[i] != '\\') val += kv.second[i];
                 props[kv.first] = val;
             }
+            if (c.find("whitelist")) props["white-list"] = c.flag("whitelist") ? "true" : "false";
             Value h = sysinfo::host();
             v["properties"] = props;
             v["memory_min_mb"] = c.num("memory_min_mb", 512);
@@ -592,6 +593,12 @@ bool do_post(Request &rq, Response &rs, const std::vector<std::string> &p, const
             if (!srvutil::check_pack(scfg.str("resource_pack"), scfg.str("resource_pack_sha1"), scfg.str("resource_pack_prompt"), err)) throw Bad(err);
             std::vector<std::pair<std::string, std::string>> props;
             if (!srvutil::validate_props(b.find("properties") ? *b.find("properties") : Value(), props, err)) throw Bad(err);
+            {
+                bool wl = true;
+                for (auto &p : props) if (p.first == "white-list") wl = p.second == "true";
+                scfg["whitelist"] = wl;
+                props.emplace_back("enforce-whitelist", wl ? "true" : "false");
+            }
             if (scfg.str("directory").empty()) throw Bad("directory required");
             std::string jtype = lower(trim(b.str("jar_type"))), ver = trim(b.str("jar_version"));
             if (scfg.str("runtime") == "native") jtype.clear();
@@ -806,11 +813,15 @@ bool do_post(Request &rq, Response &rs, const std::vector<std::string> &p, const
         std::string err;
         Value in = b.find("properties") && b.find("properties")->is_obj() ? *b.find("properties") : obj();
         Value clean = obj();
-        for (auto &kv : in.o) if (kv.first != "white-list" && kv.first != "online-mode") clean[kv.first] = kv.second;   // both are managed by CreeperCrest
+        for (auto &kv : in.o) if (kv.first != "online-mode") clean[kv.first] = kv.second;   // online-mode is managed by CreeperCrest
         std::vector<std::pair<std::string, std::string>> props;
         if (!srvutil::validate_props(clean, props, err)) throw Bad(err);
         bool offline = b.find("allow_offline") ? b.flag("allow_offline") : c.flag("allow_offline");
         props.emplace_back("online-mode", offline ? "false" : "true");
+        bool wl = c.find("whitelist") ? c.flag("whitelist") : true;
+        for (auto &p : props) if (p.first == "white-list") wl = p.second == "true";
+        props.emplace_back("enforce-whitelist", wl ? "true" : "false");
+        c["whitelist"] = wl;
         if (c.str("directory").empty()) throw Bad("directory required");
         if (!srvutil::set_properties(c.str("directory"), props)) throw Bad("failed to write server.properties");
         c["memory_min_mb"] = mn; c["memory_max_mb"] = mx; c["allow_offline"] = offline;

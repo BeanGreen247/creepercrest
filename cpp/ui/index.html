@@ -1122,7 +1122,7 @@ const OPT_FIELDS = [
   {k:'max-players', l:'Slots', t:'num', d:20, min:1, max:1000},
   {k:'gamemode', l:'Gamemode', t:'sel', d:'survival', o:[['survival','Survival'],['creative','Creative'],['adventure','Adventure'],['spectator','Spectator']]},
   {k:'difficulty', l:'Difficulty', t:'sel', d:'easy', o:[['peaceful','Peaceful'],['easy','Easy'],['normal','Normal'],['hard','Hard']]},
-  {k:'white-list', l:'Whitelist', t:'bool', d:true, lock:'Always on: CreeperCrest enforces the whitelist on every start'},
+  {k:'white-list', l:'Whitelist', t:'bool', d:true},
   {k:'cracked', l:'Cracked (offline mode)', t:'bool', d:false, note:'Lets players without a paid account join. Writes online-mode=false'},
   {k:'force-gamemode', l:'Force gamemode', t:'bool', d:false},
   {k:'allow-flight', l:'Fly', t:'bool', d:false},
@@ -1148,7 +1148,6 @@ function optBuild(props, offline) {
     if (f.k === 'cracked') v = offline;
     if (f.t === 'bool') {
       v = f.k === 'cracked' ? v : String(v) === 'true';
-      if (f.k === 'white-list') v = true;
       return `<div class="opt-row"><div class="opt-line"><label for="${id}">${esc(f.l)}</label><span class="opt-tgl"><input type="checkbox" id="${id}" ${v?'checked':''} ${f.lock?'disabled':''} onchange="optDirty()"/><i></i></span></div><div class="opt-key">${f.k === 'cracked' ? 'online-mode=' + (v ? 'false' : 'true') : f.k + '=' + v}</div>${f.lock || f.note ? `<div class="opt-note">${esc(f.lock || f.note)}</div>` : ''}</div>`;
     }
     if (f.t === 'sel') return `<div class="opt-row"><div class="opt-line"><label for="${id}">${esc(f.l)}</label><select id="${id}" onchange="optDirty()">${f.o.map(o => `<option value="${o[0]}" ${o[0]===v?'selected':''}>${esc(o[1])}</option>`).join('')}</select></div><div class="opt-key">${f.k}=${esc(v)}</div></div>`;
@@ -1188,7 +1187,7 @@ function optStep(d) {
 function optCollect() {
   const props = {};
   OPT_FIELDS.forEach(f => {
-    if (f.k === 'cracked' || f.k === 'white-list') return;
+    if (f.k === 'cracked') return;
     const e = optEl('op-' + f.k);
     props[f.k] = f.t === 'bool' ? e.checked : e.value;
   });

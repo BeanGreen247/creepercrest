@@ -6,6 +6,7 @@ project(creepercrest CXX)
 option(O2 "Use -O2 instead of -O3" OFF)
 option(DISABLE_2FA "Password-only login, no authenticator code" OFF)
 option(DISABLE_BACKUPS "Compile the backup feature out" OFF)
+option(PANEL_POWER "Always show the panel Restart / Shut down buttons" OFF)
 option(DEBUG "Debug build: -Og -g and request logging" OFF)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -48,6 +49,10 @@ if(DISABLE_2FA)
 endif()
 if(DISABLE_BACKUPS)
   target_compile_definitions(creepercrest PRIVATE CC_DISABLE_BACKUPS)
+endif()
+
+if(PANEL_POWER)
+  target_compile_definitions(creepercrest PRIVATE CC_PANEL_POWER)
 endif()
 
 # Ignore CMAKE_BUILD_TYPE so the flags match the Makefile build exactly.
