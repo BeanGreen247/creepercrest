@@ -50,6 +50,10 @@ Pass them to `make` as `NAME=y` or `NAME=n`. Leave one out and the default appli
 make -C cpp O2=y DISABLE_BACKUPS=y
 ```
 
+### Building with CMake
+
+Plain `make` is enough on every architecture that has g++ (x86-64, ARM and RISC-V included), so CMake is optional. It is there for toolchains and distributions that expect it: `make -C cpp cmake` runs `cmake` and then `make`, takes the same options (`make -C cpp cmake O2=y DISABLE_2FA=y`), and leaves the binary at `cpp/creepercrest`. It needs CMake 3.13 or newer and `pkg-config`. To run CMake yourself: `cmake -S cpp -B cpp/build/cmake -DO2=ON && make -C cpp/build/cmake`.
+
 ### Release folder
 
 `make -C cpp release` builds the binary and copies it, with the systemd unit template and a `SHA256SUMS` file, into `cpp/build/release-<architecture>/` (for example `cpp/build/release-x86_64/`), ready to attach to a release or copy to another machine. Build options apply, so `make -C cpp release O2=y` works. For a cross build, name the folder yourself: `make -C cpp release CXX=aarch64-linux-gnu-g++ ARCH=aarch64` (the OpenSSL and libzip libraries for that architecture must be installed).

@@ -3,6 +3,7 @@
 #   make DISABLE_2FA=y      password-only login, no authenticator code (default: n)
 #   make DISABLE_BACKUPS=y  compile the backup feature out (default: n)
 #   make DEBUG=y            debug build: -Og -g, request logging, no -DNDEBUG (default: n)
+#   make cmake              run cmake, then make, with the same options
 #   make release            also copy the binary into build/release-<architecture>/
 # Example: make O2=y DISABLE_BACKUPS=y DEBUG=n
 yes = $(filter y yes 1 true on,$(call lc,$(strip $(1))))
@@ -50,6 +51,15 @@ build/%.o: src/%.cpp $(wildcard src/*.h) $(STAMP)
 	@mkdir -p build
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+# make cmake  ->  run cmake, then make, with the same options (for toolchains or architectures that want CMake):
+#   make cmake O2=y DISABLE_BACKUPS=y
+# The binary still ends up at cpp/creepercrest.
+CMAKE_OPTS = $(foreach o,O2 DISABLE_2FA DISABLE_BACKUPS DEBUG,-D$(o)=$(if $(call yes,$($(o))),ON,OFF))
+
+cmake:
+	cmake -G "Unix Makefiles" -S . -B build/cmake $(CMAKE_OPTS)
+	$(MAKE) -C build/cmake
+
 # make release  ->  build/release-<architecture>/ with the binary and a checksum.
 # The architecture is `uname -m` of the machine building it; name it yourself for a cross build:
 #   make release CXX=aarch64-linux-gnu-g++ ARCH=aarch64
@@ -65,4 +75,4 @@ release: creepercrest
 
 clean:
 	rm -rf build creepercrest
-.PHONY: clean release
+.PHONY: clean release cmake
