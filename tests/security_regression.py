@@ -559,6 +559,29 @@ def t_cli(a):
         p.cleanup()
 
 
+def t_backup_ui(a):
+    """The page shows the Backups tab normally, and a DISABLE_BACKUPS=y build serves a page without it."""
+    p = Panel(a).start().login()
+    try:
+        time.sleep(0.3)
+        nobak = "built with DISABLE_BACKUPS=y" in open(p.log_path, errors="replace").read()
+        st, _, body = p.req("GET", "/", raw=True)
+        html = body.decode("utf-8", "replace")
+        has = {"tab": "showPage('backups'" in html, "page": 'id="page-backups"' in html,
+               "restore": 'id="restore-fname"' in html, "marker": "<!--BAK-->" in html}
+        if nobak:
+            bad = [k for k, v in has.items() if v]
+            if "const NOBAK = true;" not in html:
+                bad.append("NOBAK flag")
+            return not bad, ("backup UI still served: %s" % bad) if bad else "no-backups build: tab, page and dialogs are gone"
+        missing = [k for k in ("tab", "page", "restore") if not has[k]]
+        if has["marker"] or "const NOBAK = false;" not in html:
+            missing.append("markers left or flag wrong")
+        return not missing, ("default build lost: %s" % missing) if missing else "default build: Backups tab present (run against a DISABLE_BACKUPS=y build to check the other side)"
+    finally:
+        p.cleanup()
+
+
 def t_2fa_secret(a):
     """A logged-in session alone must not be enough to read the authenticator secret."""
     p = Panel(a).start().login()

@@ -305,7 +305,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
   <h1><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160.07292 160.07292" width="22" height="22" aria-hidden="true" style="vertical-align:-.25rem"><rect fill="#3eae30" width="160.07292" height="160.07292"/><g transform="translate(36.947174,215.35194)"><path fill="#000" d="M 14.646575,-93.549115 H 28.820683 V -107.72322 H 57.73586 v 13.985119 H 72.287943 V -136.73289 H 58.019342 v -42.99479 H 86.840026 V -150.907 H 0.0944922 v -28.82068 H 29.009669 v 43.08928 H 14.646575 Z"/></g></svg> Creeper Crest</h1>
   <nav id="main-nav">
     <button class="nav-link active" onclick="showPage('servers',this)">Servers</button>
-    <button class="nav-link" onclick="showPage('backups',this)">Backups</button>
+    <!--BAK--><button class="nav-link" onclick="showPage('backups',this)">Backups</button><!--/BAK-->
   </nav>
   <a href="https://github.com/BeanGreen247/creepercrest" target="_blank" rel="noopener" style="font-size:.73rem;color:#7d8590;white-space:nowrap">by BeanGreen247</a>
   __BACKEND__
@@ -353,7 +353,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
     </section>
   </div>
 
-  <!-- Backups page -->
+  <!--BAK--><!-- Backups page -->
   <div id="page-backups" class="page">
     <section>
       <div class="sec-hdr">
@@ -377,7 +377,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
       </div>
       <div id="blist"><div class="empty">No backups yet.</div></div>
     </section>
-  </div>
+  </div><!--/BAK-->
 </main>
 <footer style="text-align:center;padding:1.2rem 2rem;border-top:1px solid #30363d;margin-top:2rem;font-size:.75rem;color:#484f58">
   <a href="https://github.com/BeanGreen247/creepercrest" target="_blank" rel="noopener" style="color:#7d8590">CreeperCrest</a>
@@ -595,7 +595,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
   </div>
 </div>
 
-<!-- Restore backup overlay -->
+<!--BAK--><!-- Restore backup overlay -->
 <div class="overlay" id="restore-overlay">
   <div class="modal">
     <h3>Restore Backup</h3>
@@ -683,6 +683,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
   </div>
 </div>
 
+<!--/BAK-->
 <!-- File browser overlay -->
 <div class="overlay" id="fb-overlay">
   <div class="fb-modal" id="fb-modal">
@@ -863,6 +864,7 @@ function flash(msg, err) {
 }
 
 const CSRF = '__CSRF__';
+const NOBAK = __NOBAK__;   // true when the binary was built with DISABLE_BACKUPS=y
 
 // Associate every <label> with its field so Chrome/Brave DevTools does not log a form issue per label.
 let _lblN = 0;
@@ -931,7 +933,7 @@ function cardHTML(s) {
       <button class="btn bg-blue"   onclick="act('${s.id}','restart')">&#8635; Restart</button>
       <button class="btn bg-teal"   onclick="openFB('${s.id}')">&#128193; Files</button>
       <button class="btn bg-blue"   onclick="openWL('${s.id}')">&#128100; Whitelist</button>
-      <button class="btn bg-yellow" onclick="doBackup('${s.id}',this)">&#128190; Backup</button>
+      ${NOBAK ? '' : `<button class="btn bg-yellow" onclick="doBackup('${s.id}',this)">&#128190; Backup</button>`}
       <button class="btn bg-blue"   onclick="openOpt('${s.id}')">&#9881; Options</button>
       <button class="btn bg-gray"   onclick="openEdit('${s.id}')">&#9998; Edit</button>
       <button class="btn ${s.autostart?'bg-green':'bg-gray'} btn-full" onclick="toggleAutostart('${s.id}',${s.autostart})">&#9654;&#9654; Autostart: ${s.autostart?'ON':'OFF'}</button>
@@ -1078,11 +1080,11 @@ async function refresh() {
     document.getElementById('panel-power').style.display = d.panel_power ? 'flex' : 'none';
     optLive();
     renderServers(_servers);
-    renderBackups(d.backups || []);
-    if (d.backup_dir)  document.getElementById('bak-dir').textContent = d.backup_dir;
+    if (!NOBAK) renderBackups(d.backups || []);
+    if (!NOBAK && d.backup_dir)  document.getElementById('bak-dir').textContent = d.backup_dir;
     if (d.sysinfo)     renderSysinfo(d.sysinfo);
     if (d.max_backups !== undefined) _maxBackups = d.max_backups;
-    if (d.auto_backup) { _autoBackupCfg = d.auto_backup; renderScheduleDisplay(d.auto_backup); }
+    if (!NOBAK && d.auto_backup) { _autoBackupCfg = d.auto_backup; renderScheduleDisplay(d.auto_backup); }
     document.getElementById('upd').textContent = 'Updated ' + new Date().toLocaleTimeString();
     fetchAllLogs(d.servers || []);
     updateAllHeapGraphs(d.servers || []);
@@ -2414,7 +2416,7 @@ fixLabels(document);
 
 // Restore last active page
 (function () {
-  const page = localStorage.getItem('cc-page') || 'servers';
+  const page = NOBAK ? 'servers' : (localStorage.getItem('cc-page') || 'servers');
   const btn  = document.querySelector(`#main-nav .nav-link:${page === 'backups' ? 'last-child' : 'first-child'}`);
   showPage(page, btn);
 })();

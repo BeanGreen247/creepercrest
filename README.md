@@ -43,7 +43,7 @@ Pass them to `make` as `NAME=y` or `NAME=n`. Leave one out and the default appli
 |---|---|---|
 | `O2` | `n` (builds with `-O3`) | Build with `-O2` instead of `-O3`, for architectures where `-O3` misbehaves |
 | `DISABLE_2FA` | `n` | Login needs only the password, no authenticator code. Only use this on a trusted network |
-| `DISABLE_BACKUPS` | `n` | Backups, restores, backup-based server creation and the backup schedule are compiled out |
+| `DISABLE_BACKUPS` | `n` | Backups, restores, backup-based server creation and the backup schedule are compiled out, and the web page loses the Backups tab and the per-server Backup button, leaving only the Servers tab |
 | `DEBUG` | `n` | `-Og -g` build that logs every request to stderr |
 
 ```bash

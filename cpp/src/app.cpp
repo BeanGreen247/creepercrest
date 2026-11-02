@@ -251,6 +251,18 @@ static std::string render_index(const Session &s) {
     replace_all(h, "__REFRESH_INTERVAL__", std::to_string(cfg.refresh_interval));
     replace_all(h, "__JVM_ARGS__", default_jvm_args());
     replace_all(h, "__CSRF__", s.csrf);
+#ifdef CC_DISABLE_BACKUPS
+    replace_all(h, "__NOBAK__", "true");
+    for (size_t a; (a = h.find("<!--BAK-->")) != std::string::npos;) {   // drop the backup tab, page and dialogs from the page
+        size_t b = h.find("<!--/BAK-->", a);
+        if (b == std::string::npos) break;
+        h.erase(a, b + 11 - a);
+    }
+#else
+    replace_all(h, "__NOBAK__", "false");
+    replace_all(h, "<!--BAK-->", "");
+    replace_all(h, "<!--/BAK-->", "");
+#endif
     replace_all(h, "__ACCT__", acct_html(s.user));
     replace_all(h, "__BACKEND__",
                 "<span title=\"Native C++ backend, built " __DATE__ " " __TIME__ "\" style=\"font-size:.68rem;font-weight:600;letter-spacing:.03em;padding:.12rem .5rem;"
