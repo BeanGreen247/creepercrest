@@ -12,6 +12,8 @@ A small web panel for running Minecraft servers. One native C++ binary (about 1 
 - Resource packs: upload or download one and CreeperCrest hosts it
 - One-click and scheduled backups, restore, per-server RAM and autostart; tick which servers the weekly scheduled backup covers
 - Login with password and 2FA
+- Options page per server: RAM and property sliders, toggles, an Apply button and a restart notice
+- Build options (`O2`, `DISABLE_2FA`, `DISABLE_BACKUPS`, `DEBUG`) to tune or trim the binary, see [Build options](#build-options)
 
 ## Install
 
@@ -20,6 +22,8 @@ git clone https://github.com/BeanGreen247/creepercrest
 cd creepercrest/cpp
 sudo bash deploy.sh
 ```
+
+Want a different build? You can choose `-O2` instead of `-O3`, turn off 2FA or backups, or make a debug build. See [Build options](#build-options) below, and build with them *before* running `deploy.sh`.
 
 `deploy.sh` builds the binary if it is not built yet (needs `g++`, `make`, and the OpenSSL and libzip development packages, which it installs), then installs OpenJDK and `ufw`, opens the firewall ports you choose, creates login users and installs a systemd service. It is safe to rerun: it keeps `config.json`, `users.json` and your servers, but it never deletes old firewall rules, so check `sudo ufw status numbered` afterwards.
 
