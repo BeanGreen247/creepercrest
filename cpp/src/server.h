@@ -60,6 +60,8 @@ namespace srvutil {
 bool set_properties(const std::string &dir, const std::vector<std::pair<std::string, std::string>> &updates);
 void harden(const std::string &dir, bool allow_offline);        // throws std::runtime_error on properties failure
 std::string prop_escape(const std::string &v);
+// Current server.properties as key -> raw value (empty map if the file is missing).
+std::vector<std::pair<std::string, std::string>> read_properties(const std::string &dir);
 std::string to_bool(const std::string &v);
 // Validates wizard properties; returns false with err set. out holds ready-to-write pairs.
 bool validate_props(const json::Value &raw, std::vector<std::pair<std::string, std::string>> &out, std::string &err);

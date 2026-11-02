@@ -335,7 +335,7 @@ bool do_get(Request &rq, Response &rs, const std::vector<std::string> &p, const 
     if (p.size() == 3 && p[0] == "api") {
         auto srv = registry::get(p[1]);
         const std::string &act = p[2];
-        if (act != "logs" && act != "whitelist" && act != "files" && act != "filetext" && act != "file") return false;
+        if (act != "logs" && act != "whitelist" && act != "options" && act != "files" && act != "filetext" && act != "file") return false;
         if (!srv) { fail(rq, rs, "not found", 404); return true; }
         if (act == "logs") {
             long since = 0;
@@ -349,6 +349,27 @@ bool do_get(Request &rq, Response &rs, const std::vector<std::string> &p, const 
             v["logs"] = a;
             v["seq"] = (int64_t)seq;
             v["full"] = full;
+            ok(rq, rs, v);
+            return true;
+        }
+        if (act == "options") {
+            Value c = srv->cfg(), v = obj(), props = obj();
+            for (auto &kv : srvutil::read_properties(c.str("directory"))) {
+                std::string val;
+                for (size_t i = 0; i < kv.second.size(); i++) if (kv.second[i] != '\\') val += kv.second[i];
+                props[kv.first] = val;
+            }
+            Value h = sysinfo::host();
+            v["properties"] = props;
+            v["memory_min_mb"] = c.num("memory_min_mb", 512);
+            v["memory_max_mb"] = c.num("memory_max_mb", 1024);
+            v["host_ram_mb"] = h.find("ram_total_mb") ? *h.find("ram_total_mb") : Value();
+            v["cpu_cores"] = (int64_t)std::max<long>(1, sysconf(_SC_NPROCESSORS_ONLN));
+            v["allow_offline"] = c.flag("allow_offline");
+            v["running"] = srv->is_running();
+            std::string jt = lower(c.str("jar_type")), jar = lower(c.str("jar"));
+            if (jt.empty()) for (auto n : {"paper", "spigot", "fabric", "purpur"}) if (jar.find(n) != std::string::npos) jt = n;
+            v["software"] = jt.empty() ? "official" : (jt == "vanilla" ? "official" : jt);
             ok(rq, rs, v);
             return true;
         }
@@ -566,6 +587,7 @@ bool do_post(Request &rq, Response &rs, const std::vector<std::string> &p, const
             if (scfg.str("directory").empty()) throw Bad("directory required");
             std::string jtype = lower(trim(b.str("jar_type"))), ver = trim(b.str("jar_version"));
             if (scfg.str("runtime") == "native") jtype.clear();
+            if (!jtype.empty()) scfg["jar_type"] = jtype;
             if (!jtype.empty()) {
                 if (!jars::known_type(jtype)) throw Bad("unknown server type");
                 if (fsu::base_name(scfg.str("jar")) != scfg.str("jar")) throw Bad("JAR must be a plain filename");
@@ -764,6 +786,31 @@ bool do_post(Request &rq, Response &rs, const std::vector<std::string> &p, const
             }
         });
         Value v = obj(); v["ok"] = true; v["job"] = id;
+        ok(rq, rs, v);
+        return true;
+    } else if (action == "options") {
+        Value c = srv->cfg();
+        int64_t mn = to_int(b.find("memory_min_mb"), c.num("memory_min_mb", 512)), mx = to_int(b.find("memory_max_mb"), c.num("memory_max_mb", 1024));
+        mn = std::max<int64_t>(256, mn); mx = std::max<int64_t>(256, mx);
+        if (mn > mx) throw Bad("max RAM must be >= min RAM");
+        Value h = sysinfo::host();
+        if (auto *t = h.find("ram_total_mb"); t && t->type == Value::Int && t->i > 0 && mx > t->i) throw Bad("max RAM is more than this machine has");
+        std::string err;
+        Value in = b.find("properties") && b.find("properties")->is_obj() ? *b.find("properties") : obj();
+        Value clean = obj();
+        for (auto &kv : in.o) if (kv.first != "white-list" && kv.first != "online-mode") clean[kv.first] = kv.second;   // both are managed by CreeperCrest
+        std::vector<std::pair<std::string, std::string>> props;
+        if (!srvutil::validate_props(clean, props, err)) throw Bad(err);
+        bool offline = b.find("allow_offline") ? b.flag("allow_offline") : c.flag("allow_offline");
+        props.emplace_back("online-mode", offline ? "false" : "true");
+        if (c.str("directory").empty()) throw Bad("directory required");
+        if (!srvutil::set_properties(c.str("directory"), props)) throw Bad("failed to write server.properties");
+        c["memory_min_mb"] = mn; c["memory_max_mb"] = mx; c["allow_offline"] = offline;
+        srv->set_cfg(c);
+        registry::persist(sid, c);
+        Value v = obj();
+        v["ok"] = true; v["msg"] = "Applied";
+        v["restart_required"] = srv->is_running();
         ok(rq, rs, v);
         return true;
     } else if (action == "config") {

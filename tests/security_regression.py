@@ -2,7 +2,6 @@
 """Security regression tests for the CreeperCrest panel. Works against either backend.
 
     python3 tests/security_regression.py --backend cpp    [--cpp-bin cpp/creepercrest]
-    python3 tests/security_regression.py --backend python [--python-script python/creepercrest.py]
     python3 tests/security_regression.py --backend cpp --only forged_ban,symlink_upload
 
 Each test starts from a temporary directory with its own panel process, so nothing on the machine is touched.
@@ -54,14 +53,7 @@ class Panel:
         with open(self.fake, "w") as f:
             f.write(FAKE_SERVER)
         os.chmod(self.fake, 0o755)
-        if args.backend == "python":
-            shutil.copy(args.python_script, os.path.join(self.dir, "creepercrest.py"))
-            src_static = os.path.join(os.path.dirname(args.python_script), "static")
-            if os.path.isdir(src_static):
-                shutil.copytree(src_static, os.path.join(self.dir, "static"))
-            self.cmd = [sys.executable, os.path.join(self.dir, "creepercrest.py")]
-        else:
-            self.cmd = [os.path.abspath(args.cpp_bin)]
+        self.cmd = [os.path.abspath(args.cpp_bin)]
         self.env = dict(os.environ, CREEPERCREST_DIR=self.dir)
         self.write_cfg({"host": HOST, "port": self.port, "backup_dir": os.path.join(self.dir, "bk"), "servers": {}})
         self.log_path = os.path.join(self.dir, "panel.log")
@@ -317,6 +309,49 @@ def t_symlink_upload(a):
         if os.path.exists(os.path.join(outside, "pwned.txt")):
             notes.append("extraction followed a symlinked directory")
         return not notes, "; ".join(notes) or "writes stayed inside the server folder"
+    finally:
+        p.cleanup()
+
+
+def t_options(a):
+    """The options page reads and writes server.properties and RAM, rejects bad values, and cannot touch managed keys."""
+    p = Panel(a).start().login()
+    try:
+        d = p.add_fake()
+        notes = []
+        st, j = p.req("GET", "/api/fake/options")
+        if st != 200 or "properties" not in j or "cpu_cores" not in j:
+            return False, "GET options failed: %s %s" % (st, j)
+        body = {"memory_min_mb": 512, "memory_max_mb": 1024, "allow_offline": False,
+                "properties": {"view-distance": "12", "max-players": "7", "pvp": False, "motd": "hi\nwhite-list=false"}}
+        st, j = p.req("POST", "/api/fake/options", body)
+        if st != 400:
+            notes.append("newline in motd was accepted")
+        body["properties"]["motd"] = "hello"
+        st, j = p.req("POST", "/api/fake/options", body)
+        if st != 200 or not j.get("ok"):
+            return False, "apply failed: %s %s" % (st, j)
+        txt = open(os.path.join(d, "server.properties")).read()
+        for want in ("view-distance=12", "max-players=7", "pvp=false", "motd=hello", "online-mode=true"):
+            if want not in txt:
+                notes.append("missing " + want)
+        for bad in ({"view-distance": "99"}, {"white-list": "false"} if False else {"nope": "1"}, {"max-players": "x"}):
+            st, _ = p.req("POST", "/api/fake/options", {"properties": bad})
+            if st != 400:
+                notes.append("accepted %s" % bad)
+        st, _ = p.req("POST", "/api/fake/options", {"memory_min_mb": 2048, "memory_max_mb": 1024})
+        if st != 400:
+            notes.append("min > max accepted")
+        st, _ = p.req("POST", "/api/fake/options", {"memory_max_mb": 99999999})
+        if st != 400:
+            notes.append("RAM above the host total accepted")
+        st, _ = p.req("POST", "/api/fake/options", {"properties": {"white-list": "false", "online-mode": "false"}})
+        if "white-list=false" in open(os.path.join(d, "server.properties")).read():
+            notes.append("white-list could be switched off")
+        st, j = p.req("GET", "/api/fake/options")
+        if j.get("properties", {}).get("view-distance") != "12" or j.get("memory_max_mb") != 1024:
+            notes.append("values did not read back")
+        return not notes, "; ".join(notes) or "options round-trip, validation and managed keys all behave"
     finally:
         p.cleanup()
 
@@ -700,9 +735,8 @@ TESTS = {k[2:]: v for k, v in sorted(globals().items()) if k.startswith("t_")}
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--backend", choices=("cpp", "python"), required=True)
+    ap.add_argument("--backend", choices=("cpp",), required=True)
     ap.add_argument("--cpp-bin", default=os.path.join(ROOT, "cpp", "creepercrest"))
-    ap.add_argument("--python-script", default=os.path.join(ROOT, "python", "creepercrest.py"))
     ap.add_argument("--only", default="", help="comma separated test names")
     ap.add_argument("--list", action="store_true")
     a = ap.parse_args()

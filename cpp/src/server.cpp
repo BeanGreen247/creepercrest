@@ -144,6 +144,18 @@ void harden(const std::string &dir0, bool allow_offline) {
     fsu::write_file(path, out);
 }
 
+std::vector<std::pair<std::string, std::string>> read_properties(const std::string &dir0) {
+    std::vector<std::pair<std::string, std::string>> out;
+    std::string text;
+    if (!fsu::read_file(fsu::expand_home(dir0) + "/server.properties", text, 1 << 20)) return out;
+    for (auto &l : split_lines(text)) {
+        size_t f = l.find_first_not_of(" \t"), e = l.find('=');
+        if (f == std::string::npos || l[f] == '#' || e == std::string::npos) continue;
+        out.emplace_back(trim(l.substr(0, e)), trim(l.substr(e + 1)));
+    }
+    return out;
+}
+
 bool validate_props(const Value &raw, std::vector<std::pair<std::string, std::string>> &out, std::string &err) {
     struct Spec { const char *key; char kind; int a, b; std::vector<std::pair<const char *, const char *>> en; };
     static const std::vector<Spec> specs = {
@@ -154,7 +166,7 @@ bool validate_props(const Value &raw, std::vector<std::pair<std::string, std::st
         {"max-players", 'i', 1, 1000, {}}, {"server-port", 'i', 1024, 65535, {}}, {"view-distance", 'i', 2, 32, {}},
         {"simulation-distance", 'i', 3, 32, {}}, {"spawn-protection", 'i', 0, 1000, {}},
         {"online-mode", 'b', 0, 0, {}}, {"pvp", 'b', 0, 0, {}}, {"hardcore", 'b', 0, 0, {}}, {"white-list", 'b', 0, 0, {}},
-        {"allow-flight", 'b', 0, 0, {}}, {"allow-nether", 'b', 0, 0, {}}, {"enable-command-block", 'b', 0, 0, {}}};
+        {"allow-flight", 'b', 0, 0, {}}, {"force-gamemode", 'b', 0, 0, {}}, {"player-idle-timeout", 'i', 0, 1000000, {}}, {"allow-nether", 'b', 0, 0, {}}, {"enable-command-block", 'b', 0, 0, {}}};
     out.clear();
     if (!raw.is_obj()) return true;
     for (auto &kv : raw.o) {

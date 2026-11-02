@@ -121,6 +121,54 @@ section+section{margin-top:2.2rem}
 .empty{color:#7d8590;font-size:.88rem;padding:2.2rem;text-align:center;
   border:1px dashed #30363d;border-radius:12px;background:rgba(255,255,255,.015)}
 
+/* ── Options modal (exaroton-style) ── */
+.opt-modal{width:min(980px,96vw);max-height:94vh;overflow-y:auto;padding:1.1rem}
+.opt-head{display:flex;align-items:center;gap:.7rem;margin-bottom:.8rem;flex-wrap:wrap}
+.opt-head h3{margin:0;font-size:1.05rem}
+.opt-sw{font-size:.7rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:.15rem .5rem;border-radius:999px;background:#1f6feb33;color:#58a6ff;border:1px solid #1f6feb66}
+.opt-box{background:#0d1117;border:1px solid #21262d;border-radius:10px;padding:1rem;margin-bottom:.8rem}
+.opt-ram{text-align:center}
+.opt-ram-top{display:flex;align-items:center;justify-content:center;gap:1rem}
+.opt-ram-big{font-size:1.35rem;font-weight:700;color:#e6edf3}
+.opt-ram-sub{font-size:.78rem;color:#7d8590;margin-top:.15rem}
+.opt-step{width:28px;height:28px;border-radius:50%;border:1px solid #30363d;background:#161b22;color:#c9d1d9;font-size:1.1rem;line-height:1;cursor:pointer}
+.opt-step:hover{border-color:#58a6ff;color:#58a6ff}
+.opt-range{-webkit-appearance:none;appearance:none;width:100%;height:14px;border-radius:7px;background:#21262d;outline:none;margin:.8rem 0 .3rem;cursor:pointer}
+.opt-range::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;background:#e6edf3;border:3px solid #238636;box-shadow:0 0 6px rgba(63,185,80,.5)}
+.opt-range::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:#e6edf3;border:3px solid #238636}
+.opt-ticks{display:flex;justify-content:space-between;font-size:.68rem;color:#484f58}
+.opt-live{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:.8rem;margin-top:.9rem;text-align:left}
+.opt-meter{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:.5rem .7rem}
+.opt-meter b{display:block;font-size:.72rem;color:#7d8590;font-weight:600;margin-bottom:.3rem}
+.opt-meter .usage-bar{margin-bottom:.25rem}
+.opt-meter span{font-size:.78rem;color:#c9d1d9}
+.opt-title{font-size:.95rem;font-weight:700;margin:0 0 .6rem;color:#e6edf3}
+.opt-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:.5rem}
+.opt-row{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:.5rem .65rem}
+.opt-row.wide{grid-column:1/-1}
+.opt-line{display:flex;align-items:center;justify-content:space-between;gap:.6rem;min-height:30px}
+.opt-line label{font-size:.85rem;color:#e6edf3;font-weight:600}
+.opt-key{font-family:monospace;font-size:.66rem;color:#484f58;margin-top:.15rem;word-break:break-all}
+.opt-row input[type=text],.opt-row input[type=number],.opt-row select{background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;padding:.3rem .5rem;font-size:.82rem;outline:none;min-width:0}
+.opt-row input[type=number]{width:90px;text-align:right}
+.opt-row input[type=text]{flex:1}
+.opt-row .opt-range{margin:.45rem 0 .1rem;height:10px}
+.opt-val{font-variant-numeric:tabular-nums;font-size:.85rem;color:#e6edf3;min-width:2.2em;text-align:right}
+.opt-tgl{position:relative;width:46px;height:24px;flex:none}
+.opt-tgl input{opacity:0;width:100%;height:100%;margin:0;position:absolute;inset:0;cursor:pointer;z-index:2}
+.opt-tgl i{position:absolute;inset:0;border-radius:12px;background:#da3633;transition:background .15s}
+.opt-tgl i::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#e6edf3;transition:transform .15s}
+.opt-tgl input:checked+i{background:#238636}
+.opt-tgl input:checked+i::after{transform:translateX(22px)}
+.opt-tgl input:disabled{cursor:not-allowed}
+.opt-tgl input:disabled+i{opacity:.55}
+.opt-note{font-size:.7rem;color:#7d8590;margin-top:.15rem}
+.opt-banner{display:none;align-items:center;justify-content:space-between;gap:.8rem;flex-wrap:wrap;background:#9e6a0322;border:1px solid #9e6a03;color:#e3b341;border-radius:8px;padding:.6rem .8rem;margin-bottom:.8rem;font-size:.85rem}
+.opt-banner.show{display:flex}
+.opt-foot{display:flex;justify-content:space-between;align-items:center;gap:.6rem;flex-wrap:wrap;position:sticky;bottom:-1.1rem;background:#161b22;padding:.7rem 0 .2rem}
+.opt-dirty{font-size:.78rem;color:#7d8590}
+.opt-dirty.on{color:#e3b341}
+
 /* ── Add server modal ── */
 .overlay{position:fixed;inset:0;background:rgba(1,4,9,.78);display:none;
   align-items:center;justify-content:center;z-index:100}
@@ -372,6 +420,42 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
     <div class="modal-btns">
       <button class="btn bg-gray" onclick="closeAdd()">Cancel</button>
       <button class="btn bg-green" id="modal-submit-btn" onclick="submitModal()">Add Server</button>
+    </div>
+  </div>
+</div>
+
+<!-- Options (sliders / apply / restart notice) -->
+<div class="overlay" id="opt-overlay">
+  <div class="modal opt-modal">
+    <div class="opt-head"><h3 id="opt-title">Options</h3><span class="opt-sw" id="opt-sw"></span><span class="badge off" id="opt-state"></span></div>
+    <div class="opt-banner" id="opt-banner"><span id="opt-banner-msg"></span><button class="btn bg-blue" id="opt-restart" onclick="optRestart()">&#8635; Restart now</button></div>
+    <div class="opt-box opt-ram">
+      <div class="opt-ram-top">
+        <button class="opt-step" onclick="optStep(-1)" title="Less RAM">&minus;</button>
+        <div><div class="opt-ram-big" id="opt-ram-big">-</div><div class="opt-ram-sub" id="opt-ram-sub"></div></div>
+        <button class="opt-step" onclick="optStep(1)" title="More RAM">+</button>
+      </div>
+      <input class="opt-range" type="range" id="opt-max" oninput="optRam('max')"/>
+      <div class="opt-ticks" id="opt-ticks"></div>
+      <div class="opt-line" style="margin-top:.6rem"><label style="font-size:.8rem;color:#7d8590;font-weight:400">Initial heap (Xms): <span id="opt-min-v" style="color:#e6edf3"></span></label></div>
+      <input class="opt-range" type="range" id="opt-min" oninput="optRam('min')" style="height:8px"/>
+      <div class="opt-live">
+        <div class="opt-meter"><b>Server CPU</b><div class="usage-bar"><div class="usage-fill cpu-fill" id="opt-cpu-f" style="width:0%"></div></div><span id="opt-cpu-v">-</span></div>
+        <div class="opt-meter"><b>Server RAM</b><div class="usage-bar"><div class="usage-fill ram-fill" id="opt-ram-f" style="width:0%"></div></div><span id="opt-ram-v">-</span></div>
+        <div class="opt-meter"><b>Java heap</b><div class="usage-bar"><div class="usage-fill heap-fill" id="opt-heap-f" style="width:0%"></div></div><span id="opt-heap-v">-</span></div>
+      </div>
+    </div>
+    <div class="opt-box">
+      <div class="opt-title">server.properties</div>
+      <div class="opt-grid" id="opt-grid"></div>
+    </div>
+    <div class="opt-foot">
+      <span class="opt-dirty" id="opt-dirty">No changes</span>
+      <span style="display:flex;gap:.5rem">
+        <button class="btn bg-gray" onclick="optClose()">Close</button>
+        <button class="btn bg-gray" onclick="optReset()">Reset</button>
+        <button class="btn bg-green" id="opt-apply" onclick="optApply()" disabled>Apply</button>
+      </span>
     </div>
   </div>
 </div>
@@ -847,6 +931,7 @@ function cardHTML(s) {
       <button class="btn bg-teal"   onclick="openFB('${s.id}')">&#128193; Files</button>
       <button class="btn bg-blue"   onclick="openWL('${s.id}')">&#128100; Whitelist</button>
       <button class="btn bg-yellow" onclick="doBackup('${s.id}',this)">&#128190; Backup</button>
+      <button class="btn bg-blue"   onclick="openOpt('${s.id}')">&#9881; Options</button>
       <button class="btn bg-gray"   onclick="openEdit('${s.id}')">&#9998; Edit</button>
       <button class="btn ${s.autostart?'bg-green':'bg-gray'} btn-full" onclick="toggleAutostart('${s.id}',${s.autostart})">&#9654;&#9654; Autostart: ${s.autostart?'ON':'OFF'}</button>
       <button class="btn bg-danger btn-full" onclick="delServer('${s.id}')">Remove</button>
@@ -989,6 +1074,7 @@ async function refresh() {
   try {
     const d = await api('GET', '/api/status');
     _servers = d.servers || [];
+    optLive();
     renderServers(_servers);
     renderBackups(d.backups || []);
     if (d.backup_dir)  document.getElementById('bak-dir').textContent = d.backup_dir;
@@ -1004,6 +1090,175 @@ async function refresh() {
     _refreshing = false;
   }
 }
+
+// ── Options (exaroton-style sliders, apply, restart notice) ───────────────────
+
+const OPT_FIELDS = [
+  {k:'max-players', l:'Slots', t:'num', d:20, min:1, max:1000},
+  {k:'gamemode', l:'Gamemode', t:'sel', d:'survival', o:[['survival','Survival'],['creative','Creative'],['adventure','Adventure'],['spectator','Spectator']]},
+  {k:'difficulty', l:'Difficulty', t:'sel', d:'easy', o:[['peaceful','Peaceful'],['easy','Easy'],['normal','Normal'],['hard','Hard']]},
+  {k:'white-list', l:'Whitelist', t:'bool', d:true, lock:'Always on: CreeperCrest enforces the whitelist on every start'},
+  {k:'cracked', l:'Cracked (offline mode)', t:'bool', d:false, note:'Lets players without a paid account join. Writes online-mode=false'},
+  {k:'force-gamemode', l:'Force gamemode', t:'bool', d:false},
+  {k:'allow-flight', l:'Fly', t:'bool', d:false},
+  {k:'pvp', l:'PvP', t:'bool', d:true},
+  {k:'hardcore', l:'Hardcore', t:'bool', d:false},
+  {k:'allow-nether', l:'Nether', t:'bool', d:true},
+  {k:'enable-command-block', l:'Command blocks', t:'bool', d:false},
+  {k:'view-distance', l:'View distance (chunks)', t:'rng', d:10, min:2, max:32},
+  {k:'simulation-distance', l:'Simulation distance (chunks)', t:'rng', d:10, min:3, max:32},
+  {k:'spawn-protection', l:'Spawn protection (blocks)', t:'rng', d:16, min:0, max:64},
+  {k:'player-idle-timeout', l:'Idle timeout (minutes, 0 = off)', t:'num', d:0, min:0, max:1000000},
+  {k:'motd', l:'MOTD', t:'txt', d:'A Minecraft Server', wide:true},
+];
+let _opt = null;   // {sid, base, min, max, hostMb, props}
+
+const optGB = mb => (mb / 1024).toFixed(mb % 1024 ? 2 : 0).replace(/(\.\d)0$/, '$1');
+const optEl = id => document.getElementById(id);
+
+function optBuild(props, offline) {
+  optEl('opt-grid').innerHTML = OPT_FIELDS.map(f => {
+    const id = 'op-' + f.k, raw = f.k === 'cracked' ? undefined : props[f.k];
+    let v = raw === undefined ? f.d : raw;
+    if (f.k === 'cracked') v = offline;
+    if (f.t === 'bool') {
+      v = f.k === 'cracked' ? v : String(v) === 'true';
+      if (f.k === 'white-list') v = true;
+      return `<div class="opt-row"><div class="opt-line"><label for="${id}">${esc(f.l)}</label><span class="opt-tgl"><input type="checkbox" id="${id}" ${v?'checked':''} ${f.lock?'disabled':''} onchange="optDirty()"/><i></i></span></div><div class="opt-key">${f.k === 'cracked' ? 'online-mode=' + (v ? 'false' : 'true') : f.k + '=' + v}</div>${f.lock || f.note ? `<div class="opt-note">${esc(f.lock || f.note)}</div>` : ''}</div>`;
+    }
+    if (f.t === 'sel') return `<div class="opt-row"><div class="opt-line"><label for="${id}">${esc(f.l)}</label><select id="${id}" onchange="optDirty()">${f.o.map(o => `<option value="${o[0]}" ${o[0]===v?'selected':''}>${esc(o[1])}</option>`).join('')}</select></div><div class="opt-key">${f.k}=${esc(v)}</div></div>`;
+    if (f.t === 'num') return `<div class="opt-row"><div class="opt-line"><label for="${id}">${esc(f.l)}</label><input type="number" id="${id}" min="${f.min}" max="${f.max}" value="${esc(v)}" oninput="optDirty()"/></div><div class="opt-key">${f.k}=${esc(v)}</div></div>`;
+    if (f.t === 'rng') return `<div class="opt-row"><div class="opt-line"><label for="${id}">${esc(f.l)}</label><span class="opt-val" id="${id}-v">${esc(v)}</span></div><input class="opt-range" type="range" id="${id}" min="${f.min}" max="${f.max}" step="1" value="${esc(v)}" oninput="optRng('${id}')"/><div class="opt-key">${f.k}=${esc(v)}</div></div>`;
+    return `<div class="opt-row ${f.wide?'wide':''}"><div class="opt-line"><label for="${id}">${esc(f.l)}</label><input type="text" id="${id}" maxlength="200" value="${esc(v)}" oninput="optDirty()"/></div><div class="opt-key">${f.k}=${esc(v)}</div></div>`;
+  }).join('');
+  OPT_FIELDS.filter(f => f.t === 'rng').forEach(f => optFill('op-' + f.k));
+}
+
+function optFill(id) {
+  const r = optEl(id), pct = (r.value - r.min) / (r.max - r.min) * 100;
+  r.style.background = `linear-gradient(90deg,#238636 ${pct}%,#21262d ${pct}%)`;
+}
+function optRng(id) { optEl(id + '-v').textContent = optEl(id).value; optFill(id); optDirty(); }
+
+function optRamUI() {
+  const mx = +optEl('opt-max').value, mn = +optEl('opt-min').value;
+  optEl('opt-ram-big').textContent = optGB(mx) + ' GB RAM';
+  optEl('opt-min-v').textContent = optGB(mn) + ' GB';
+  optEl('opt-ram-sub').textContent = _opt.cores + ' CPU core' + (_opt.cores > 1 ? 's' : '') + ' on this machine' + (_opt.hostMb ? ' · ' + optGB(_opt.hostMb) + ' GB installed' : '');
+  optFill('opt-max'); optFill('opt-min');
+}
+function optRam(which) {
+  const mx = optEl('opt-max'), mn = optEl('opt-min');
+  if (which === 'max' && +mn.value > +mx.value) mn.value = mx.value;
+  if (which === 'min' && +mn.value > +mx.value) mx.value = mn.value;
+  mn.max = mx.value;
+  optRamUI(); optDirty();
+}
+function optStep(d) {
+  const mx = optEl('opt-max');
+  mx.value = Math.min(+mx.max, Math.max(+mx.min, +mx.value + d * 512));
+  optRam('max');
+}
+
+function optCollect() {
+  const props = {};
+  OPT_FIELDS.forEach(f => {
+    if (f.k === 'cracked' || f.k === 'white-list') return;
+    const e = optEl('op-' + f.k);
+    props[f.k] = f.t === 'bool' ? e.checked : e.value;
+  });
+  return {memory_min_mb: +optEl('opt-min').value, memory_max_mb: +optEl('opt-max').value,
+          allow_offline: optEl('op-cracked').checked, properties: props};
+}
+function optDirty() {
+  if (!_opt) return;
+  const now = JSON.stringify(optCollect()), ch = now !== _opt.snap;
+  optEl('opt-apply').disabled = !ch;
+  const d = optEl('opt-dirty');
+  d.textContent = ch ? 'Unsaved changes' : 'No changes';
+  d.className = 'opt-dirty' + (ch ? ' on' : '');
+  document.querySelectorAll('#opt-grid .opt-key').forEach(k => {
+    const row = k.closest('.opt-row'), inp = row.querySelector('input,select');
+    const key = (OPT_FIELDS.find(f => 'op-' + f.k === inp.id) || {}).k;
+    k.textContent = key === 'cracked' ? 'online-mode=' + (inp.checked ? 'false' : 'true') : key + '=' + (inp.type === 'checkbox' ? inp.checked : inp.value);
+  });
+}
+
+async function openOpt(sid) {
+  const r = await api('GET', `/api/${sid}/options`);
+  if (r.error) { flash(r.error, true); return; }
+  const s = _servers.find(x => x.id === sid) || {};
+  const hostMb = Number.isInteger(r.host_ram_mb) ? r.host_ram_mb : 0;
+  const top = Math.max(1024, Math.floor((hostMb || Math.max(r.memory_max_mb, 16384)) / 512) * 512);
+  _opt = {sid, cores: r.cpu_cores || 1, hostMb, name: s.name || sid};
+  optEl('opt-title').textContent = 'Options - ' + _opt.name;
+  optEl('opt-sw').textContent = r.software;
+  optEl('opt-banner').classList.remove('show');
+  const mx = optEl('opt-max'), mn = optEl('opt-min');
+  mx.min = 512; mx.max = Math.max(top, r.memory_max_mb); mx.step = 256; mx.value = r.memory_max_mb;
+  mn.min = 256; mn.max = r.memory_max_mb; mn.step = 256; mn.value = Math.min(r.memory_min_mb, r.memory_max_mb);
+  const t = [], n = 4;
+  for (let i = 0; i <= n; i++) t.push(`<span>${optGB(Math.round(((+mx.max - 512) * i / n + 512) / 256) * 256)} GB</span>`);
+  optEl('opt-ticks').innerHTML = t.join('');
+  optBuild(r.properties || {}, !!r.allow_offline);
+  optRamUI();
+  _opt.snap = JSON.stringify(optCollect());
+  optSetState(s.running !== undefined ? s.running : r.running);
+  optLive();
+  optDirty();
+  optEl('opt-overlay').classList.add('open');
+}
+
+function optSetState(run) {
+  const b = optEl('opt-state');
+  b.className = 'badge ' + (run ? 'on' : 'off');
+  b.textContent = run ? 'RUNNING' : 'STOPPED';
+  _opt.running = run;
+}
+
+function optLive() {   // called on every status refresh while the modal is open
+  if (!_opt) return;
+  const s = _servers.find(x => x.id === _opt.sid);
+  if (!s) return;
+  optSetState(s.running);
+  const set = (f, v, pct, txt, cls) => { optEl(f).style.width = pct + '%'; optEl(f).className = 'usage-fill ' + cls; optEl(v).textContent = txt; };
+  const lvl = p => p >= 90 ? ' crit' : p >= 75 ? ' hi' : '';
+  if (s.cpu_pct == null) set('opt-cpu-f', 'opt-cpu-v', 0, s.running ? '-' : 'Offline', 'cpu-fill');
+  else set('opt-cpu-f', 'opt-cpu-v', Math.min(s.cpu_pct, 100), s.cpu_pct.toFixed(1) + '%', 'cpu-fill');
+  if (s.ram_mb == null) set('opt-ram-f', 'opt-ram-v', 0, s.running ? '-' : 'Offline', 'ram-fill');
+  else { const p = Math.min(Math.round(s.ram_mb / (s.memory_max_mb || 1) * 100), 100); set('opt-ram-f', 'opt-ram-v', p, s.ram_mb + ' / ' + s.memory_max_mb + ' MB', 'ram-fill' + lvl(p)); }
+  if (s.heap_used_mb == null) set('opt-heap-f', 'opt-heap-v', 0, s.running ? '-' : 'Offline', 'heap-fill');
+  else { const p = Math.min(Math.round(s.heap_used_mb / (s.heap_total_mb || 1) * 100), 100); set('opt-heap-f', 'opt-heap-v', p, s.heap_used_mb + ' / ' + s.heap_total_mb + ' MB', 'heap-fill' + lvl(p)); }
+}
+
+async function optApply() {
+  const body = optCollect();
+  const r = await api('POST', `/api/${_opt.sid}/options`, body);
+  if (!r.ok) { flash(r.error || r.msg || 'Apply failed', true); return; }
+  _opt.snap = JSON.stringify(body);
+  optDirty();
+  const run = !!r.restart_required;
+  optEl('opt-banner-msg').textContent = run
+    ? 'Options applied. Restart the server for the changes to take effect.'
+    : 'Options applied. They will be used the next time the server starts.';
+  optEl('opt-restart').style.display = run ? '' : 'none';
+  optEl('opt-banner').classList.add('show');
+  flash(run ? 'Applied - restart the server to use the new options' : 'Applied');
+  refresh();
+}
+async function optRestart() {
+  optEl('opt-banner').classList.remove('show');
+  await act(_opt.sid, 'restart');
+}
+function optReset() {
+  if (!_opt) return;
+  const o = JSON.parse(_opt.snap);
+  optEl('opt-max').value = o.memory_max_mb; optEl('opt-min').max = o.memory_max_mb; optEl('opt-min').value = o.memory_min_mb;
+  const props = {...o.properties};
+  optBuild(props, o.allow_offline);
+  optRamUI(); optDirty();
+}
+function optClose() { optEl('opt-overlay').classList.remove('open'); _opt = null; }
 
 // ── Server actions ─────────────────────────────────────────────────────────────
 

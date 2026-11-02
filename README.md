@@ -1,6 +1,6 @@
 # CreeperCrest
 
-A small web panel for running Minecraft servers. One native C++ binary (about 1 MB) with the web UI and editor built in, works offline. The original single-file Python version is kept in `python/` until the migration is complete; the C++ port in `cpp/` has the same features, the same `config.json` and `users.json`, and the same login and 2FA.
+A small web panel for running Minecraft servers. One native C++ binary (about 1 MB) with the web UI and editor built in, works offline. The Python version has been removed and is no longer supported.
 
 ## Features
 
@@ -25,80 +25,10 @@ sudo bash deploy.sh
 
 Skip the firewall steps with `CC_SKIP_FIREWALL=1 sudo -E bash deploy.sh`. Open `http://<server-ip>:8888` when it finishes.
 
-Build and run by hand with `make -C cpp && cpp/creepercrest`. It keeps `config.json` and `users.json` next to the binary (or in the folder named by `CREEPERCREST_DIR`). Run it as the user that owns the server files. The Python version still runs with `python3 python/creepercrest.py` and installs with `sudo bash python/deploy.sh`.
+Build and run by hand with `make -C cpp && cpp/creepercrest`. It keeps `config.json` and `users.json` next to the binary (or in the folder named by `CREEPERCREST_DIR`). Run it as the user that owns the server files.
 
-## Python version: keeping it, switching, migrating fully
+Update the C++ version with `sudo bash cpp/deploy.sh`; it keeps your settings.
 
-The Python version in `python/` and the C++ version in `cpp/` share the same install folder (`~/creepercrest`), the same `creepercrest` systemd service, the same port, and the same `config.json` and `users.json`. Only one of them can run at a time. The page header tells you which one you are talking to: a green **C++ BACKEND** pill, or an amber **PYTHON BACKEND** pill.
-
-### Updating a clone you deployed from (when `git pull` stops)
-
-If you installed by running `deploy.sh` inside your clone, your live `config.json` sits in the repository folder. Older versions kept `config.json` and `creepercrest.service` in the repository root, and they now live in `python/`, so `git pull` stops with "Your local changes to the following files would be overwritten". Back your files up, let the pull go through, then put your config back and redeploy. After the pull the Python script has moved too, so redeploy right away: the running service keeps working, but the next restart or reboot fails until you do.
-
-Stay on Python:
-
-```bash
-cd ~/creepercrest
-cp config.json ~/config.json.bak
-cp users.json ~/users.json.bak
-cp creepercrest.service ~/creepercrest.service.bak
-git checkout -- config.json creepercrest.service
-git pull
-cp ~/config.json.bak config.json
-sudo bash python/deploy.sh
-```
-
-Switch to C++ instead: run the same first six lines, then `cd cpp && sudo bash deploy.sh`.
-
-Restoring `config.json` is what brings your servers back; without it the installer creates an empty config. `users.json` is not tracked by git, so your logins and 2FA are untouched. The installer writes the real service file under `/etc/systemd/system` itself, so the `creepercrest.service` backup only matters if you edited that template on purpose. Because the clone and the install are the same folder, the installer leaves `creepercrest.py`, `static/` and `config.json` as untracked files in the repository root; that is harmless, or clone a second copy elsewhere to pull from.
-
-### Already running the Python version
-
-Nothing breaks and nothing needs doing. The installed copy keeps running. After a `git pull`, the Python installer lives in `python/`, so update it with:
-
-```bash
-sudo bash python/deploy.sh
-```
-
-### Switching to the C++ version
-
-```bash
-cd creepercrest/cpp
-sudo bash deploy.sh
-```
-
-Your users, 2FA codes, servers and settings carry over. Everyone is signed out once. Check it worked:
-
-```bash
-systemctl cat creepercrest | grep ExecStart    # should end in .../creepercrest, not python3
-```
-
-and look for the green **C++ BACKEND** pill in the page header.
-
-### Going back to Python
-
-```bash
-sudo bash python/deploy.sh
-```
-
-This rewrites the service to start the Python script again. One difference to know about: the per-server tick for scheduled backups is only understood by the C++ version, so Python backs up every server on the schedule.
-
-### Migrating fully (removing the Python version)
-
-Do this only after the C++ version has run correctly for you for a while, because it removes your way back.
-
-1. Back up your settings: `cp ~/creepercrest/config.json ~/creepercrest/users.json ~/`
-2. Switch with `cpp/deploy.sh` as above, and confirm the green pill and the `ExecStart` line.
-3. Remove the Python leftovers from the install folder (the C++ binary needs none of them):
-   ```bash
-   rm -f ~/creepercrest/creepercrest.py
-   rm -rf ~/creepercrest/static ~/creepercrest/__pycache__
-   ```
-   Keep `creepercrest` (the binary), `config.json`, `users.json` and your server folders.
-4. Optional: if nothing else on the machine uses them, remove the Python packages the old installer added: `sudo apt remove python3-qrcode python3-qrcodegen` (leave `python3` itself alone, since the system usually needs it). Keep `qrencode`; the C++ version uses it for QR codes.
-5. Optional, in your clone of this repository: delete the Python version with `git rm -r python/` and commit. After that, `python/deploy.sh` no longer exists, so going back means checking out an older commit.
-
-Run `sudo bash cpp/deploy.sh` again whenever you update the C++ version; it keeps your settings.
 
 ## Ports
 
@@ -140,22 +70,6 @@ Passwords are hashed with scrypt, logins are throttled, sessions last 8 h idle, 
 
 **On the internet:** prefer a VPN. Otherwise serve it over HTTPS, either behind a reverse proxy that sets `X-Forwarded-Proto` and `X-Forwarded-For` (then set `trusted_proxies`), or with `tls_cert` / `tls_key` in `config.json`.
 
-## C++ version versus Python version
-
-Measured on the dev machine (Debian 13, 2 cores) with an empty panel and the same `users.json`. Memory is `VmRSS` from `/proc`; "private" is `RssAnon`, the part that is not the program file or shared libraries.
-
-| | Python | C++ |
-|---|---|---|
-| Time from launch to first page served | 0.37 s | 0.02 s |
-| Memory used, idle | 32 MB | 9.7 MB |
-| Private (anonymous) memory, idle | 18.9 MB | 1.3 MB |
-| CPU used over 60 s idle | 0.02 s | 0.00 s |
-| Peak memory while uploading a 200 MB file | 852 MB | 42 MB |
-| Program size | 4,315-line script plus 651 KB editor bundle, needs Python | 1.06 MB binary, editor 15 KB |
-| Runtime needs | Python 3 | OpenSSL and libzip libraries |
-
-The C++ version also reads host and process CPU only when the page asks for it, so it never wakes up on its own except for a once-a-minute backup schedule check. The Minecraft server itself is unaffected by the choice: a Paper server in the same test used about 800 to 1,030 MB, so the panel is a small part of the total either way. These are single runs on one machine; repeat them with `ps` and `/proc/<pid>/status` before relying on the exact numbers.
-
 ## Configuration
 
 `config.json` is created on first run.
@@ -183,8 +97,7 @@ cpp/src/               C++ sources: HTTP server, auth and 2FA, process manager, 
 cpp/ui/                web UI (index.html) and the built-in editor (editor.js), embedded in the binary
 cpp/deploy.sh          installer for the C++ version
 cpp/creepercrest.service  systemd unit template
-tests/                 security regression tests that run against either version
-python/                original Python version: creepercrest.py, static/ (CodeMirror bundle), deploy.sh, service file, default config.json
+tests/                 security regression tests that run against the C++ version
 deploy.sh              installer
 creepercrest.service   systemd unit template
 config.json            settings
@@ -210,11 +123,10 @@ What the panel does for you:
 
 Known limits: the pages still use inline scripts, so the content-security policy cannot forbid them and output escaping is what prevents script injection; files that the panel itself rewrites inside a server folder (for example `server.properties`) follow a symlink if you deliberately made one; and all logins are equal administrators.
 
-Run the security regression tests against either version (each test starts its own throwaway panel in a temporary folder):
+Run the security regression tests against the C++ version (each test starts its own throwaway panel in a temporary folder):
 
 ```bash
 python3 tests/security_regression.py --backend cpp       # needs cpp/creepercrest built
-python3 tests/security_regression.py --backend python
 python3 tests/security_regression.py --backend cpp --only forged_ban,symlink_upload
 ```
 
