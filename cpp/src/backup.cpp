@@ -26,6 +26,9 @@ static bool name_ok(const std::string &n) {
 }
 
 std::string path_of(const std::string &fname) {
+#ifdef CC_DISABLE_BACKUPS
+    (void)fname; return "";
+#endif
     if (!name_ok(fname)) return "";
     std::string bak = fsu::resolve(dir());
     std::string path = fsu::resolve(bak + "/" + fname);
@@ -64,6 +67,9 @@ static void prune(const std::string &sid, const std::string &bak) {
 }
 
 Value create(const std::string &sid, jobs::Job *job) {
+#ifdef CC_DISABLE_BACKUPS
+    (void)sid; (void)job; throw std::runtime_error("backups are disabled in this build");
+#endif
     auto srv = registry::get(sid);
     if (!srv) throw std::runtime_error("Server not found");
     std::string src = srv->directory(), bak = dir();
@@ -91,6 +97,9 @@ Value create(const std::string &sid, jobs::Job *job) {
 }
 
 std::string restore(const std::string &fname, const std::string &sid, jobs::Job *job) {
+#ifdef CC_DISABLE_BACKUPS
+    (void)fname; (void)sid; (void)job; throw std::runtime_error("backups are disabled in this build");
+#endif
     auto srv = registry::get(sid);
     if (!srv) throw std::runtime_error("Server not found");
     if (srv->is_running()) throw std::runtime_error("Stop the server before restoring");
@@ -105,6 +114,9 @@ std::string restore(const std::string &fname, const std::string &sid, jobs::Job 
 }
 
 Value list() {
+#ifdef CC_DISABLE_BACKUPS
+    return Value::array();
+#endif
     Value out = Value::array();
     std::string bak = dir();
     if (!fsu::is_dir(bak)) return out;
@@ -125,6 +137,9 @@ Value list() {
 static const char *WEEKDAYS[] = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"};
 
 void start_scheduler() {
+#ifdef CC_DISABLE_BACKUPS
+    return;
+#endif
     std::thread([] {
         std::string last_fired;
         while (true) {

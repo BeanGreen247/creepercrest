@@ -27,6 +27,23 @@ Skip the firewall steps with `CC_SKIP_FIREWALL=1 sudo -E bash deploy.sh`. Open `
 
 Build and run by hand with `make -C cpp && cpp/creepercrest`. It keeps `config.json` and `users.json` next to the binary (or in the folder named by `CREEPERCREST_DIR`). Run it as the user that owns the server files.
 
+### Build options
+
+Pass them to `make` as `NAME=y` or `NAME=n`. Leave one out and the default applies. Changing an option rebuilds everything.
+
+| Option | Default | Effect when `y` |
+|---|---|---|
+| `O2` | `n` (builds with `-O3`) | Build with `-O2` instead of `-O3`, for architectures where `-O3` misbehaves |
+| `DISABLE_2FA` | `n` | Login needs only the password, no authenticator code. Only use this on a trusted network |
+| `DISABLE_BACKUPS` | `n` | Backups, restores, backup-based server creation and the backup schedule are compiled out |
+| `DEBUG` | `n` | `-Og -g` build that logs every request to stderr |
+
+```bash
+make -C cpp O2=y DISABLE_BACKUPS=y
+```
+
+`deploy.sh` only builds when the binary is missing, so build with your options first, or run `CC_SKIP_FIREWALL=1 sudo -E env O2=y bash cpp/deploy.sh` on a fresh checkout. Run `make -C cpp clean` before switching options on an already built tree if you want a guaranteed clean build.
+
 Update the C++ version with `sudo bash cpp/deploy.sh`; it keeps your settings.
 
 

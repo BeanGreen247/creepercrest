@@ -191,7 +191,9 @@ static std::string render_login(const std::string &error = "") {
         "<form class=\"card\" method=\"post\" action=\"/login\" autocomplete=\"off\">\n<h1>Creeper Crest <span style=\"font-size:.65rem;font-weight:600;padding:.1rem .45rem;border-radius:999px;color:#3fb950;border:1px solid #1f6b30;background:#0d2615;vertical-align:middle;margin-left:.4rem\">C++ BACKEND</span></h1>" + err +
         "\n<label for=\"u\">Username</label><input id=\"u\" name=\"username\" autocomplete=\"username\" autofocus required>"
         "\n<label for=\"p\">Password</label><input id=\"p\" name=\"password\" type=\"password\" autocomplete=\"current-password\" required>"
+#ifndef CC_DISABLE_2FA
         "\n<label for=\"t\">Authenticator code</label><input id=\"t\" name=\"totp\" class=\"totp\" inputmode=\"numeric\" maxlength=\"7\" placeholder=\"000000\" autocomplete=\"one-time-code\" required>"
+#endif
         "\n<button type=\"submit\">Sign in</button></form>");
 }
 
@@ -401,8 +403,12 @@ static void login_attempt(const http::Request &rq, http::Response &rs) {
     json::Value users = auth::load_users();
     const json::Value *rec = users.find(user);
     bool pw_ok = auth::verify_password(form["password"], rec ? rec->str("pw") : dummy_hash());
+#ifdef CC_DISABLE_2FA
+    if (rec && pw_ok) {   // built with DISABLE_2FA=y: the password alone signs in
+#else
     uint64_t step = auth::verify_totp(rec ? rec->str("totp") : DUMMY_TOTP, form["totp"], rec ? user : "");
     if (rec && pw_ok && step && auth::consume_totp(user, step)) {
+#endif
         remember_ip(user, ip);
         log_line("auth", "login ok user=" + user + " ip=" + ip);
         return redirect(rq, rs, "/", session_cookie(rq, create_session(user), SESSION_MAX));
@@ -468,6 +474,9 @@ bool body_gate(const http::Request &rq, http::Response &rs) {
 }
 
 void handle(http::Request &rq, http::Response &rs) {
+#ifdef CC_DEBUG
+    { fprintf(stderr, "[debug] %s %s\n", rq.method.c_str(), rq.path.c_str()); }
+#endif
     Session sess;
     if (rq.method != "GET" && rq.method != "POST" && rq.method != "DELETE" && rq.method != "HEAD") {
         rs.code = 405; rs.set("Allow", "GET, HEAD, POST, DELETE"); return;

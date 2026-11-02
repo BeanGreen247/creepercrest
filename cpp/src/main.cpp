@@ -42,6 +42,15 @@ int main(int argc, char **argv) {
         fprintf(stderr, "LAN mode ON: private-network clients need no login; other addresses must sign in. Never port-forward this panel.\n");
     if (!app::cfg.auth_disabled && auth::load_users().o.empty() && !app::cfg.lan_mode)
         fprintf(stderr, "WARNING: no users exist, so the panel is locked. Create one with:  creepercrest adduser <name>\n");
+#ifdef CC_DISABLE_2FA
+    fprintf(stderr, "WARNING: built with DISABLE_2FA=y - logins need only a password, no authenticator code.\n");
+#endif
+#ifdef CC_DISABLE_BACKUPS
+    fprintf(stderr, "NOTE: built with DISABLE_BACKUPS=y - backups and the backup schedule are off.\n");
+#endif
+#ifdef CC_DEBUG
+    fprintf(stderr, "NOTE: debug build - requests are logged to stderr.\n");
+#endif
     // graceful shutdown: stop every managed server, then exit
     sigset_t set;
     sigemptyset(&set);
