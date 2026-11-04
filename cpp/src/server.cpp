@@ -4,6 +4,7 @@
 #include "sysinfo.h"
 #include "util.h"
 #include <fcntl.h>
+#include <sched.h>
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -368,6 +369,23 @@ std::pair<bool, std::string> ManagedServer::start() {
     }
     if (!fsu::is_dir(dir)) return {false, "Server directory not found: " + dir};
 
+    // CPU limits: cores pins the process to the first N allowed cores; speed (percent of full speed) is enforced by pausing it briefly each cycle.
+    int64_t want_cores = c.num("cpu_cores", 0), speed = c.num("cpu_speed_pct", 100);
+    if (speed < 10 || speed > 100) speed = 100;
+    cpu_set_t pin; CPU_ZERO(&pin);
+    bool do_pin = false;
+    if (want_cores > 0) {
+        cpu_set_t cur;
+        if (sched_getaffinity(0, sizeof cur, &cur) == 0) {
+            int avail = CPU_COUNT(&cur);
+            if (want_cores < avail) {
+                int taken = 0;
+                for (int i = 0; i < CPU_SETSIZE && taken < want_cores; i++)
+                    if (CPU_ISSET(i, &cur)) { CPU_SET(i, &pin); taken++; }
+                do_pin = true;
+            }
+        }
+    }
     int in[2], out[2], ep[2];
     if (pipe2(in, O_CLOEXEC) != 0 || pipe2(out, O_CLOEXEC) != 0 || pipe2(ep, O_CLOEXEC) != 0) return {false, "pipe failed"};
     std::vector<char *> av;
@@ -382,6 +400,7 @@ std::pair<bool, std::string> ManagedServer::start() {
         dup2(out[1], 1);
         dup2(out[1], 2);
         int err = 0;
+        if (do_pin) sched_setaffinity(0, sizeof pin, &pin);
         if (chdir(dir.c_str()) != 0) err = errno;
         else { execvp(av[0], av.data()); err = errno; }
         if (write(ep[1], &err, sizeof err) < 0) {}
@@ -409,6 +428,19 @@ std::pair<bool, std::string> ManagedServer::start() {
     auto self = shared_from_this();
     int rfd = out[0];
     std::thread([self, rfd]() { self->reader_loop(rfd); }).detach();
+    if (do_pin) append("[CreeperCrest] CPU limit: " + std::to_string(want_cores) + " core(s)");
+    if (speed < 100) {
+        append("[CreeperCrest] CPU limit: " + std::to_string(speed) + "% speed");
+        std::thread([self, pid, speed]() {   // duty-cycle the process group: run for speed ms, pause for the rest of each 100 ms
+            while (self->running_.load() && self->pid_.load() == pid) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(speed));
+                if (!self->running_.load()) break;
+                kill(-pid, SIGSTOP);
+                std::this_thread::sleep_for(std::chrono::milliseconds(100 - speed));
+                kill(-pid, SIGCONT);
+            }
+        }).detach();
+    }
     return {true, "Started (PID " + std::to_string(pid) + ")"};
 }
 
@@ -547,6 +579,8 @@ Value ManagedServer::status() {
     o["pid"] = run ? Value((int64_t)pid) : Value();
     o["memory_min_mb"] = c.num("memory_min_mb", legacy);
     o["memory_max_mb"] = c.num("memory_max_mb", legacy);
+    o["cpu_cores"] = c.num("cpu_cores", 0);
+    o["cpu_speed_pct"] = c.num("cpu_speed_pct", 100);
     o["directory"] = c.str("directory");
     o["jar"] = c.str("jar", "server.jar");
     o["runtime"] = c.str("runtime", "java");

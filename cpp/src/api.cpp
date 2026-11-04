@@ -365,6 +365,8 @@ bool do_get(Request &rq, Response &rs, const std::vector<std::string> &p, const 
             v["properties"] = props;
             v["memory_min_mb"] = c.num("memory_min_mb", 512);
             v["memory_max_mb"] = c.num("memory_max_mb", 1024);
+            v["cpu_limit_cores"] = c.num("cpu_cores", 0);
+            v["cpu_speed_pct"] = c.num("cpu_speed_pct", 100);
             v["host_ram_mb"] = h.find("ram_total_mb") ? *h.find("ram_total_mb") : Value();
             v["cpu_cores"] = (int64_t)std::max<long>(1, sysconf(_SC_NPROCESSORS_ONLN));
             v["allow_offline"] = c.flag("allow_offline");
@@ -824,6 +826,10 @@ bool do_post(Request &rq, Response &rs, const std::vector<std::string> &p, const
         c["whitelist"] = wl;
         if (c.str("directory").empty()) throw Bad("directory required");
         if (!srvutil::set_properties(c.str("directory"), props)) throw Bad("failed to write server.properties");
+        int64_t cores = to_int(b.find("cpu_cores"), c.num("cpu_cores", 0)), speed = to_int(b.find("cpu_speed_pct"), c.num("cpu_speed_pct", 100));
+        if (cores < 0 || cores > 1024) throw Bad("CPU cores must be 0 (all) or more");
+        if (speed < 10 || speed > 100) throw Bad("CPU speed must be between 10 and 100 percent");
+        c["cpu_cores"] = cores; c["cpu_speed_pct"] = speed;
         c["memory_min_mb"] = mn; c["memory_max_mb"] = mx; c["allow_offline"] = offline;
         srv->set_cfg(c);
         registry::persist(sid, c);

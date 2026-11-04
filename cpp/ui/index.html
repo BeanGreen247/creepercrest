@@ -450,6 +450,10 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
       <div class="opt-ticks" id="opt-ticks"></div>
       <div class="opt-line" style="margin-top:.6rem"><label style="font-size:.8rem;color:#7d8590;font-weight:400">Initial heap (Xms): <span id="opt-min-v" style="color:#e6edf3"></span></label></div>
       <input class="opt-range" type="range" id="opt-min" oninput="optRam('min')" style="height:8px"/>
+      <div class="opt-line" style="margin-top:.6rem"><label style="font-size:.8rem;color:#7d8590;font-weight:400">CPU cores: <span id="opt-cores-v" style="color:#e6edf3"></span></label></div>
+      <input class="opt-range" type="range" id="opt-cores" oninput="optCpu()" style="height:8px"/>
+      <div class="opt-line" style="margin-top:.6rem"><label style="font-size:.8rem;color:#7d8590;font-weight:400">CPU speed: <span id="opt-speed-v" style="color:#e6edf3"></span></label></div>
+      <input class="opt-range" type="range" id="opt-speed" min="10" max="100" step="5" oninput="optCpu()" style="height:8px"/>
       <div class="opt-live">
         <div class="opt-meter"><b>Server CPU</b><div class="usage-bar"><div class="usage-fill cpu-fill" id="opt-cpu-f" style="width:0%"></div></div><span id="opt-cpu-v">-</span></div>
         <div class="opt-meter"><b>Server RAM</b><div class="usage-bar"><div class="usage-fill ram-fill" id="opt-ram-f" style="width:0%"></div></div><span id="opt-ram-v">-</span></div>
@@ -1171,6 +1175,12 @@ function optRamUI() {
   optEl('opt-ram-sub').textContent = _opt.cores + ' CPU core' + (_opt.cores > 1 ? 's' : '') + ' on this machine' + (_opt.hostMb ? ' · ' + optGB(_opt.hostMb) + ' GB installed' : '');
   optFill('opt-max'); optFill('opt-min');
 }
+function optCpu() {
+  const c = optEl('opt-cores'), sp = optEl('opt-speed');
+  optEl('opt-cores-v').textContent = +c.value >= +c.max ? 'all (' + c.max + ')' : c.value;
+  optEl('opt-speed-v').textContent = sp.value + '%';
+  optFill('opt-cores'); optFill('opt-speed'); optDirty();
+}
 function optRam(which) {
   const mx = optEl('opt-max'), mn = optEl('opt-min');
   if (which === 'max' && +mn.value > +mx.value) mn.value = mx.value;
@@ -1191,7 +1201,9 @@ function optCollect() {
     const e = optEl('op-' + f.k);
     props[f.k] = f.t === 'bool' ? e.checked : e.value;
   });
+  const cc = optEl('opt-cores');
   return {memory_min_mb: +optEl('opt-min').value, memory_max_mb: +optEl('opt-max').value,
+          cpu_cores: +cc.value >= +cc.max ? 0 : +cc.value, cpu_speed_pct: +optEl('opt-speed').value,
           allow_offline: optEl('op-cracked').checked, properties: props};
 }
 function optDirty() {
@@ -1224,8 +1236,11 @@ async function openOpt(sid) {
   const t = [], n = 4;
   for (let i = 0; i <= n; i++) t.push(`<span>${optGB(Math.round(((+mx.max - 512) * i / n + 512) / 256) * 256)} GB</span>`);
   optEl('opt-ticks').innerHTML = t.join('');
+  const cc = optEl('opt-cores');
+  cc.min = 1; cc.max = _opt.cores; cc.step = 1; cc.value = r.cpu_limit_cores > 0 ? Math.min(r.cpu_limit_cores, _opt.cores) : _opt.cores;
+  optEl('opt-speed').value = r.cpu_speed_pct || 100;
   optBuild(r.properties || {}, !!r.allow_offline);
-  optRamUI();
+  optRamUI(); optCpu();
   _opt.snap = JSON.stringify(optCollect());
   optSetState(s.running !== undefined ? s.running : r.running);
   optLive();
@@ -1279,8 +1294,10 @@ function optReset() {
   const o = JSON.parse(_opt.snap);
   optEl('opt-max').value = o.memory_max_mb; optEl('opt-min').max = o.memory_max_mb; optEl('opt-min').value = o.memory_min_mb;
   const props = {...o.properties};
+  optEl('opt-cores').value = o.cpu_cores > 0 ? o.cpu_cores : optEl('opt-cores').max;
+  optEl('opt-speed').value = o.cpu_speed_pct;
   optBuild(props, o.allow_offline);
-  optRamUI(); optDirty();
+  optRamUI(); optCpu();
 }
 function optIsDirty() { return !!_opt && JSON.stringify(optCollect()) !== _opt.snap; }
 function optWarn(on) { optEl('opt-warn').classList.toggle('show', on); }
