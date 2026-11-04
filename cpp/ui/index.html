@@ -701,6 +701,7 @@ nav#main-nav{display:flex;gap:.15rem;margin-left:.6rem;background:#0a0d12;paddin
     <div class="frow"><label>Max backups kept per server (0 = unlimited, otherwise 3-28)</label>
       <input id="ab-max" type="number" min="0" max="28" value="0" style="width:100px" onchange="clampMaxBackups(this)"/>
     </div>
+    <div class="frow"><label style="display:flex;align-items:center;gap:.5rem"><input type="checkbox" id="ab-world" style="width:auto"/> Only back up the world (skip jars, plugins, configs and logs)</label></div>
     <div class="modal-btns">
       <button class="btn bg-gray" onclick="closeAutoBackup()">Cancel</button>
       <button class="btn bg-green" onclick="submitAutoBackup()">Save Schedule</button>
@@ -1109,6 +1110,7 @@ async function refresh() {
     if (!NOBAK && d.backup_dir)  document.getElementById('bak-dir').textContent = d.backup_dir;
     if (d.sysinfo)     renderSysinfo(d.sysinfo);
     if (d.max_backups !== undefined) _maxBackups = d.max_backups;
+    if (d.backup_world_only !== undefined) _worldOnly = d.backup_world_only;
     if (!NOBAK && d.auto_backup) { _autoBackupCfg = d.auto_backup; renderScheduleDisplay(d.auto_backup); }
     document.getElementById('upd').textContent = 'Updated ' + new Date().toLocaleTimeString();
     fetchAllLogs(d.servers || []);
@@ -2392,6 +2394,7 @@ async function submitCreateFromBackup() {
 
 let _autoBackupCfg = {enabled: false, day: 'sunday', hour: 3, minute: 0};
 let _maxBackups = 0;
+let _worldOnly = false;
 
 function openAutoBackup() {
   document.getElementById('ab-enabled').value = _autoBackupCfg.enabled ? '1' : '0';
@@ -2399,6 +2402,7 @@ function openAutoBackup() {
   document.getElementById('ab-hour').value    = _autoBackupCfg.hour   ?? 3;
   document.getElementById('ab-minute').value  = _autoBackupCfg.minute ?? 0;
   document.getElementById('ab-max').value     = _maxBackups;
+  document.getElementById('ab-world').checked = _worldOnly;
   const chosen = Array.isArray(_autoBackupCfg.servers) ? _autoBackupCfg.servers : null;   // null = every server
   document.getElementById('ab-servers').innerHTML = _servers.length ? _servers.map(sv =>
     `<label style="display:flex;align-items:center;gap:.5rem;margin:0;font-size:.85rem;color:#c9d1d9;cursor:pointer">
@@ -2424,6 +2428,7 @@ async function submitAutoBackup() {
     hour:    parseInt(document.getElementById('ab-hour').value)   || 0,
     minute:  parseInt(document.getElementById('ab-minute').value) || 0,
     max_backups: normMaxBackups(document.getElementById('ab-max').value),
+    backup_world_only: document.getElementById('ab-world').checked,
   };
   const boxes = [...document.querySelectorAll('#ab-servers .ab-srv')];
   if (boxes.length) body.servers = boxes.filter(b => b.checked).map(b => b.value);
@@ -2432,6 +2437,7 @@ async function submitAutoBackup() {
   if (r.ok) {
     _autoBackupCfg = r.auto_backup;
     _maxBackups = r.max_backups;
+    _worldOnly = r.backup_world_only;
     renderScheduleDisplay(r.auto_backup);
     flash(body.enabled
       ? `Auto-backup scheduled - every ${body.day} at ${String(body.hour).padStart(2,'0')}:${String(body.minute).padStart(2,'0')}`

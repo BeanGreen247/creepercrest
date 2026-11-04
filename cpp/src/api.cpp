@@ -292,6 +292,7 @@ bool do_get(Request &rq, Response &rs, const std::vector<std::string> &p, const 
         if (!ab.is_obj()) { ab = obj(); ab["enabled"] = false; ab["day"] = "sunday"; ab["hour"] = 3; ab["minute"] = 0; }
         v["auto_backup"] = ab;
         v["max_backups"] = registry::cfg_num("max_backups", 0);
+        v["backup_world_only"] = registry::cfg_num("backup_world_only", 0) > 0;
         ok(rq, rs, v);
         return true;
     }
@@ -499,7 +500,9 @@ bool do_post(Request &rq, Response &rs, const std::vector<std::string> &p, const
             int64_t mb = to_int(b.find("max_backups"), registry::cfg_num("max_backups", 0));
             int64_t m = mb <= 0 ? 0 : std::max<int64_t>(3, std::min<int64_t>(28, mb));
             registry::cfg_set("max_backups", Value(m));
-            Value v = obj(); v["ok"] = true; v["auto_backup"] = sched; v["max_backups"] = m;
+            bool wo = b.find("backup_world_only") ? b.flag("backup_world_only") : registry::cfg_num("backup_world_only", 0) > 0;
+            registry::cfg_set("backup_world_only", Value((int64_t)(wo ? 1 : 0)));
+            Value v = obj(); v["ok"] = true; v["auto_backup"] = sched; v["max_backups"] = m; v["backup_world_only"] = wo;
             ok(rq, rs, v);
             return true;
         }

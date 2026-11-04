@@ -2,6 +2,7 @@
 #include "app.h"
 #include "fsu.h"
 #include "registry.h"
+#include "server.h"
 #include "zipx.h"
 #include <dirent.h>
 #include <sys/stat.h>
@@ -66,6 +67,17 @@ static void prune(const std::string &sid, const std::string &bak) {
     for (size_t i = 0; i + (size_t)limit < mine.size(); i++) unlink((bak + "/" + mine[i]).c_str());
 }
 
+// World folders to back up when "world only" is on: level-name from server.properties (default "world") plus its _nether / _the_end siblings.
+static std::vector<std::string> world_dirs(const std::string &src) {
+    std::string lvl = "world";
+    for (auto &kv : srvutil::read_properties(src))
+        if (kv.first == "level-name" && !kv.second.empty()) lvl = kv.second;
+    std::vector<std::string> out;
+    if (lvl.find("..") != std::string::npos || lvl[0] == '/') return out;
+    for (auto suf : {"", "_nether", "_the_end"}) if (fsu::is_dir(src + "/" + lvl + suf)) out.push_back(lvl + suf);
+    return out;
+}
+
 Value create(const std::string &sid, jobs::Job *job) {
 #ifdef CC_DISABLE_BACKUPS
     (void)sid; (void)job; throw std::runtime_error("backups are disabled in this build");
@@ -77,7 +89,11 @@ Value create(const std::string &sid, jobs::Job *job) {
     chmod(bak.c_str(), 0700);   // backups hold whole servers: keep them private (best effort on a folder we may not own)
     std::string fname = sid + "-" + fsu::now_str("%Y%m%d-%H%M%S") + ".zip", fpath = bak + "/" + fname;
     std::vector<std::pair<std::string, std::string>> files;
-    walk(src, "", files, true);
+    if (registry::cfg_num("backup_world_only", 0) > 0) {
+        auto worlds = world_dirs(src);
+        if (worlds.empty()) throw std::runtime_error("World folder not found - nothing to back up");
+        for (auto &w : worlds) walk(src, w, files, false);
+    } else walk(src, "", files, true);
     if (job) job->set_unit("bytes", 0);
     try {
         zipx::create(fpath, files, [&](int64_t d, int64_t t) { if (job) { job->total = t; job->done = d; } });
