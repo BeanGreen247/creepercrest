@@ -99,18 +99,25 @@ do_remove_firewall() {
     local MC GEY lan
     read -rp "  Minecraft port range that was opened [25565-25575]: " MC; MC="${MC:-25565-25575}"
     read -rp "  Geyser UDP port(s), comma separated, or 'none' [28258]: " GEY; GEY="${GEY:-28258}"
-    echo "  (SSH rules are never touched and ufw is not disabled.)"
-    run sudo "$UFW" --force delete allow "$PANEL_PORT/tcp" >/dev/null 2>&1 || true
+    local SSH_PORTS; SSH_PORTS=$(sudo ss -tlnp 2>/dev/null | awk '/sshd/ {n=split($4,a,":"); print a[n]}' | sort -u); SSH_PORTS="${SSH_PORTS:-22}"
+    echo "  (SSH stays open on port(s): $(echo $SSH_PORTS); ufw is not disabled.)"
+    ufw_del() {   # never deletes a rule for a port sshd listens on
+        local spec="$1" port; port="${spec%%/*}"
+        for sp in $SSH_PORTS; do [ "$port" = "$sp" ] && { echo "  keeping $spec (ssh port)"; return 0; }; done
+        run sudo "$UFW" --force delete allow "$@" >/dev/null 2>&1 || true
+    }
+    ufw_del "$PANEL_PORT/tcp"
     for lan in $(ip -o -4 route show scope link 2>/dev/null | awk '$1 !~ /^169\.254\./ {print $1}'); do
-        run sudo "$UFW" --force delete allow from "$lan" to any port "$PANEL_PORT" proto tcp >/dev/null 2>&1 || true
+        ufw_del "$PANEL_PORT/tcp" from "$lan" to any port "$PANEL_PORT" proto tcp
     done
-    run sudo "$UFW" --force delete allow "${MC/-/:}/tcp" >/dev/null 2>&1 || true
+    case " $(seq "${MC%-*}" "${MC#*-}" 2>/dev/null | tr '\n' ' ') " in *" ${SSH_PORTS%% *} "*) echo "  keeping Minecraft range rule (it covers the ssh port)" ;; *) ufw_del "${MC/-/:}/tcp" ;; esac
     if [ "$GEY" != "none" ]; then
-        for p in ${GEY//,/ }; do run sudo "$UFW" --force delete allow "$p/udp" >/dev/null 2>&1 || true; done
+        for p in ${GEY//,/ }; do ufw_del "$p/udp"; done
     fi
     if [ -x "$BIN" ]; then
-        for p in $(cc server-ports); do run sudo "$UFW" --force delete allow "$p/tcp" >/dev/null 2>&1 || true; done
+        for p in $(cc server-ports); do ufw_del "$p/tcp"; done
     fi
+    for sp in $SSH_PORTS; do run sudo "$UFW" allow "$sp/tcp" >/dev/null; done   # belt and braces: ssh stays allowed
     echo "  firewall rules for panel port $PANEL_PORT, $MC and Geyser removed (where present)"
 }
 do_remove_servers() {   # Minecraft server folders = worlds, jars, plugins
