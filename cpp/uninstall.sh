@@ -71,14 +71,15 @@ safe_rm() {   # refuses obviously dangerous paths
 }
 
 do_stop_service() {
-    if systemctl list-unit-files creepercrest.service &>/dev/null; then
+    if [ -f "$SERVICE" ]; then
         run sudo systemctl stop creepercrest 2>/dev/null || true
         run sudo systemctl disable creepercrest 2>/dev/null || true
     fi
 }
 do_remove_service() {
+    [ -f "$SERVICE" ] || { echo "  service not installed, nothing to do."; return 0; }
     do_stop_service
-    if [ -f "$SERVICE" ]; then run sudo rm -f "$SERVICE"; echo "  removed $SERVICE"; fi
+    run sudo rm -f "$SERVICE"; echo "  removed $SERVICE"
     run sudo systemctl daemon-reload
     run sudo systemctl reset-failed creepercrest 2>/dev/null || true
 }
@@ -96,6 +97,7 @@ do_remove_panel_data() {   # settings, logins and certificate
 do_remove_firewall() {
     local UFW; UFW=$(command -v ufw || echo /usr/sbin/ufw)
     [ -x "$UFW" ] || { echo "  ufw not available, nothing to do."; return 0; }
+    sudo "$UFW" status 2>/dev/null | grep -q "Status: active" || { echo "  ufw is not active, nothing to do."; return 0; }
     local MC GEY lan
     read -rp "  Minecraft port range that was opened [25565-25575]: " MC; MC="${MC:-25565-25575}"
     read -rp "  Geyser UDP port(s), comma separated, or 'none' [28258]: " GEY; GEY="${GEY:-28258}"
@@ -161,6 +163,10 @@ backups_menu() {
     esac
 }
 
+HAS_ANYTHING=0
+{ [ -f "$SERVICE" ] || [ -d "$APP_DIR" ] || [ -d "$TARGET_DIR" ] || [ ${#SERVER_DIRS[@]} -gt 0 ]; } && HAS_ANYTHING=1
+need_sudo() { [ "$(id -u)" = 0 ] || [ "$DRY" = 1 ] || sudo -v || { echo "sudo is required."; exit 1; }; }
+
 # ── Menu ───────────────────────────────────────────────────────────────────────
 echo ""
 echo "What do you want to remove?"
@@ -174,6 +180,10 @@ echo "  7) Minecraft server folders only      (worlds, jars, plugins; keeps the 
 echo "  8) Backups only                       (delete all, old, or one server's)"
 echo "  9) Quit"
 read -rp "Choice [9]: " CHOICE
+
+case "${CHOICE:-9}" in 1|2|3|4|6|7)
+    if [ "$HAS_ANYTHING" = 0 ] && [ "${CHOICE}" != 2 ]; then echo "Nothing is installed for $TARGET_USER (no service, no $APP_DIR). Nothing to remove."; exit 0; fi ;; esac
+case "${CHOICE:-9}" in 1|2|3|4|5|6|7|8) need_sudo ;; esac
 
 case "${CHOICE:-9}" in
     1) type_to_confirm "This removes the panel AND your Minecraft server folders (worlds). Backups are kept." REMOVE || { echo "Aborted."; exit 0; }
