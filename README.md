@@ -62,6 +62,8 @@ Plain `make` is enough on every architecture that has g++ (x86-64, ARM and RISC-
 
 Update the C++ version with `sudo bash cpp/deploy.sh`; it keeps your settings.
 
+Remove it with `sudo bash cpp/uninstall.sh` (add `--dry-run` to preview). The menu can remove everything but keep backups, everything including backups, only the software, only the service, only the firewall rules, only the settings and logins, only the Minecraft server folders, or just delete backups (all, older than N days, or one server's).
+
 
 ## Control it from a terminal (SSH or a local console)
 
@@ -147,6 +149,7 @@ Passwords are hashed with scrypt, logins are throttled, sessions last 8 h idle, 
 cpp/src/               C++ sources: HTTP server, auth and 2FA, process manager, backups, API
 cpp/ui/                web UI (index.html) and the built-in editor (editor.js), embedded in the binary
 cpp/deploy.sh          installer for the C++ version
+cpp/uninstall.sh       uninstaller (menu, --dry-run)
 cpp/creepercrest.service  systemd unit template
 tests/                 security regression tests that run against the C++ version
 deploy.sh              installer
